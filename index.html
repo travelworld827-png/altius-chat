@@ -393,9 +393,32 @@ const sb=supabase.createClient(SB_URL,SB_KEY);
 
 // ── USERS (stored in localStorage, admin-managed) ─────────────
 const SEED=[];  // empty — admin adds real people
-function loadUsers(){try{const s=localStorage.getItem('ac_users');return s?JSON.parse(s):SEED;}catch{return SEED;}}
-function saveUsers(u){localStorage.setItem('ac_users',JSON.stringify(u));}
-let USERS=loadUsers();
+function loadUsersLocal(){try{const s=localStorage.getItem('ac_users');return s?JSON.parse(s):[];}catch{return [];}}
+function saveUsersLocal(u){localStorage.setItem('ac_users',JSON.stringify(u));}
+let USERS=loadUsersLocal();
+
+// Supabase-backed user/config sync
+async function pushUsersToSB(){
+  await sb.from('app_config').upsert({key:'users',value:JSON.stringify(USERS)},{onConflict:'key'});
+  await sb.from('app_config').upsert({key:'company',value:localStorage.getItem('ac_company')||'Altius'},{onConflict:'key'});
+  await sb.from('app_config').upsert({key:'setup_done',value:'1'},{onConflict:'key'});
+}
+async function pullUsersFromSB(){
+  try{
+    const{data,error}=await sb.from('app_config').select('key,value').in('key',['users','company','setup_done']);
+    if(error||!data||data.length===0)return false;
+    const map={};data.forEach(r=>map[r.key]=r.value);
+    if(!map.users)return false;
+    const parsed=JSON.parse(map.users);
+    if(!Array.isArray(parsed)||parsed.length===0)return false;
+    USERS=parsed;
+    saveUsersLocal(USERS);
+    if(map.company)localStorage.setItem('ac_company',map.company);
+    localStorage.setItem('ac_setup_done','1');
+    return true;
+  }catch(e){return false;}
+}
+async function saveUsers(u){USERS=u;saveUsersLocal(u);await pushUsersToSB();}
 
 function getGroups(){
   if(USERS.length===0)return[];
@@ -848,7 +871,7 @@ function renderAdminList(){
     list.appendChild(card);
   });
 }
-function saveAdminForm(){
+async function saveAdminForm(){
   const name=document.getElementById('af-name').value.trim();
   const id=document.getElementById('af-id').value.trim().toLowerCase().replace(/\s+/g,'');
   const role=document.getElementById('af-role').value.trim();
@@ -867,7 +890,9 @@ function saveAdminForm(){
     USERS.push({id,name,role,pass,admin:isAdmin,color:c.color,bg:c.bg});
     saveUsers(USERS);clearForm();
   }
-  err.style.display='none';renderAdminList();toast('✓ Saved — '+name);editingId=null;
+  err.style.display='none';
+  await saveUsers(USERS);
+  renderAdminList();toast('✓ Saved — '+name);editingId=null;
 }
 function editUser(uid){
   const u=USERS.find(x=>x.id===uid);if(!u)return;
@@ -885,10 +910,11 @@ function editUser(uid){
   document.getElementById('af-name').focus();
   window.scrollTo(0,0);
 }
-function deleteUser(uid){
+async function deleteUser(uid){
   const u=USERS.find(x=>x.id===uid);if(!u)return;
   if(!confirm('Remove '+u.name+' from Altius Chat?'))return;
-  USERS.splice(USERS.findIndex(x=>x.id===uid),1);saveUsers(USERS);
+  USERS.splice(USERS.findIndex(x=>x.id===uid),1);
+  await saveUsers(USERS);
   renderAdminList();toast('Removed '+u.name);
 }
 function cancelEdit(){
@@ -972,7 +998,7 @@ function backToStep1() {
   renderSetupDots(1);
 }
 
-function finishSetup() {
+async function finishSetup() {
   const company = document.getElementById('s-company').value.trim();
   const err = document.getElementById('s-err2');
   if (!company) { err.textContent = 'Please enter your company name.'; err.style.display = 'block'; return; }
@@ -984,11 +1010,25 @@ function finishSetup() {
   const pass = document.getElementById('s-pass').value.trim();
   const c = SETUP_COLORS[setupSelColor];
 
+  // show saving state
+  const btn = document.querySelector('#setup-step2 .lb');
+  btn.textContent = 'Saving...'; btn.disabled = true;
+
   const adminUser = { id, name, role, pass, admin: true, color: c.color, bg: c.bg };
   USERS = [adminUser];
-  saveUsers(USERS);
+  saveUsersLocal(USERS);
   localStorage.setItem('ac_company', company);
   localStorage.setItem('ac_setup_done', '1');
+
+  // push to Supabase so everyone else gets it
+  try {
+    await pushUsersToSB();
+  } catch(e) {
+    err.textContent = 'Could not save to server. Check your internet.';
+    err.style.display = 'block';
+    btn.textContent = 'Create Admin Account →'; btn.disabled = false;
+    return;
+  }
 
   // auto login as admin
   curUser = adminUser;
@@ -997,15 +1037,42 @@ function finishSetup() {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────
-(function(){
-  const sid=localStorage.getItem('ac_session');
-  USERS=loadUsers();
-  if(sid){curUser=USERS.find(u=>u.id===sid);if(curUser){startApp();return;}}
-  // first time — no users at all
-  if(!localStorage.getItem('ac_setup_done') && USERS.length===0){
-    initSetupScreen();return;
+(async function(){
+  // Always show a blank loading screen while we check Supabase
+  // so no one sees setup or login before we know what to show
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  const splash=document.createElement('div');
+  splash.style.cssText='position:fixed;inset:0;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;z-index:999;';
+  splash.innerHTML=`
+    <div style="width:50px;height:50px;border-radius:14px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:20px;font-weight:600;color:#1a1000;">AI</div>
+    <div style="font-size:16px;font-weight:600;">Altius Chat</div>
+    <div style="font-size:13px;color:var(--text3);">Loading...</div>
+  `;
+  document.body.appendChild(splash);
+
+  // ALWAYS pull from Supabase first — ignore local cache
+  let sbOk = false;
+  try { sbOk = await pullUsersFromSB(); } catch(e){}
+
+  // If Supabase had no data, fall back to local (admin's own device)
+  if(!sbOk) USERS = loadUsersLocal();
+
+  splash.remove();
+
+  const sid = localStorage.getItem('ac_session');
+
+  if(USERS.length > 0){
+    // Users exist → go to login (or auto-login if session saved)
+    if(sid){
+      curUser = USERS.find(u => u.id === sid);
+      if(curUser){ startApp(); return; }
+    }
+    showScreen('s-login');
+    return;
   }
-  showScreen('s-login');
+
+  // No users anywhere — truly first time → setup screen
+  initSetupScreen();
 })();
 </script>
 </body>
