@@ -460,12 +460,25 @@ function goBack(){
 document.getElementById('l-pass').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
 document.getElementById('l-user').addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('l-pass').focus();});
 
-function doLogin(){
-  USERS=loadUsers();
+async function doLogin(){
   const u=document.getElementById('l-user').value.trim().toLowerCase();
   const p=document.getElementById('l-pass').value;
+  const btn=document.querySelector('#s-login .lb');
+  btn.textContent='Signing in...';btn.disabled=true;
+
+  // ALWAYS pull latest users from Supabase before checking password
+  try{ await pullUsersFromSB(); }catch(e){}
+  USERS=loadUsersLocal();
+
+  btn.textContent='Sign in →';btn.disabled=false;
+
   const user=USERS.find(x=>x.id===u&&x.pass===p);
-  if(!user){document.getElementById('lerr').style.display='block';document.getElementById('l-pass').value='';return;}
+  if(!user){
+    document.getElementById('lerr').style.display='block';
+    document.getElementById('lerr').textContent='Wrong username or password.';
+    document.getElementById('l-pass').value='';
+    return;
+  }
   document.getElementById('lerr').style.display='none';
   curUser=user;localStorage.setItem('ac_session',user.id);
   startApp();
@@ -483,8 +496,8 @@ function doLogout(){
 // ── APP START ─────────────────────────────────────────────────
 function startApp(){
   // set company name
-  const company=localStorage.getItem('ac_company');
-  if(company){const t=document.getElementById('app-bar-title');if(t)t.textContent=company+' Chat';}
+  const company=localStorage.getItem('ac_company')||'Altius';
+  const t=document.getElementById('app-bar-title');if(t)t.textContent=company+' Chat';
   // render me bar
   const av=document.getElementById('me-av');
   av.textContent=ini(curUser.name);av.style.background=curUser.bg;av.style.color=curUser.color;
@@ -892,7 +905,10 @@ async function saveAdminForm(){
   }
   err.style.display='none';
   await saveUsers(USERS);
-  renderAdminList();toast('✓ Saved — '+name);editingId=null;
+  // re-pull to confirm saved
+  await pullUsersFromSB();
+  USERS=loadUsersLocal();
+  renderAdminList();renderContacts();toast('✓ Saved — '+name);editingId=null;
 }
 function editUser(uid){
   const u=USERS.find(x=>x.id===uid);if(!u)return;
