@@ -1081,7 +1081,7 @@ async function sendMsg(){
     }
     // update lastMsgTs so polling knows this is already seen
     lastMsgTs[activeConv]=new Date().toISOString();
-    await loadAndRenderFast(activeConv);
+    await silentReload(activeConv);
     // update contact preview
     const sender=curUser;
     lastMsgs[activeConv]={preview:'You: '+(savedText||'📎 File'),ts:new Date().toISOString()};
