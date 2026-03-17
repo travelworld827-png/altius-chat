@@ -461,39 +461,11 @@ const sb = {
     return true;
   },
 
-  // Realtime via SSE
+  // Dummy channel (we use polling instead — more reliable cross-browser)
   channel(name) {
-    const subs = [];
-    const obj = {
-      on(ev, filter, cb) { subs.push({filter, cb}); return obj; },
-      subscribe(statusCb) {
-        const url = SB_URL.replace('https','wss') + '/realtime/v1/websocket?apikey=' + SB_KEY + '&vsn=1.0.0';
-        try {
-          const ws = new WebSocket(url);
-          ws.onopen = () => {
-            ws.send(JSON.stringify({topic:'realtime:'+name,event:'phx_join',payload:{config:{broadcast:{self:false},presence:{key:''},postgres_changes:subs.map(s=>s.filter)}},ref:'1'}));
-            if(statusCb) statusCb('SUBSCRIBED');
-          };
-          ws.onmessage = (e) => {
-            try {
-              const msg = JSON.parse(e.data);
-              if(msg.event === 'postgres_changes') {
-                const payload = msg.payload;
-                subs.forEach(s => { if(s.filter && s.filter.table === payload.data?.table) s.cb(payload); });
-              }
-            } catch(err){}
-          };
-          ws.onerror = () => { if(statusCb) statusCb('ERROR'); };
-          obj._ws = ws;
-        } catch(e) {}
-        return obj;
-      },
-      _ws: null
-    };
-    return obj;
+    return { on(){ return this; }, subscribe(){ return this; }, _interval:null };
   },
-
-  removeChannel(ch) { try { ch?._ws?.close(); } catch(e){} },
+  removeChannel(ch) { try{ if(ch?._interval) clearInterval(ch._interval); }catch(e){} },
 
   // Storage upload
   storage: {
@@ -649,8 +621,9 @@ async function doLogin(){
 
 function doLogout(){
   if(rtCh){sb.removeChannel(rtCh);rtCh=null;}
+  if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
   localStorage.removeItem('ac_session');
-  curUser=null;activeConv=null;convMap={};lastMsgs={};
+  curUser=null;activeConv=null;convMap={};lastMsgs={};lastMsgTs={};peerReadTs={};unreadCounts={};
   document.getElementById('l-user').value='';
   document.getElementById('l-pass').value='';
   showScreen('s-login');
@@ -686,53 +659,67 @@ function dismissNotifBanner(){
 }
 
 function sendNotification(title, body, convKey){
-  // Don't notify if app is focused and that conv is open
-  if(document.visibilityState==='visible' && activeConv===convKey) return;
-  if(!('Notification' in window)||Notification.permission!=='granted') return;
+  if(document.visibilityState==='visible'&&activeConv===convKey)return;
+  if(!('Notification' in window)||Notification.permission!=='granted'){
+    // fallback: flash tab title
+    let flashes=0;const orig=document.title;
+    const iv=setInterval(()=>{
+      document.title=flashes%2===0?'💬 '+title:orig;
+      if(++flashes>6){clearInterval(iv);document.title=orig;}
+    },600);
+    return;
+  }
   try{
-    const n=new Notification(title,{
-      body:body,
-      icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="%23e8a045"/><text x="50%" y="55%" font-size="20" text-anchor="middle" dominant-baseline="middle" font-family="monospace" font-weight="bold" fill="%231a1000">AI</text></svg>',
-      badge:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="%23e8a045"/></svg>',
-      tag:convKey,
-      renotify:true,
-      silent:false,
-    });
-    n.onclick=()=>{
-      window.focus();
-      openChat(convKey);
-      n.close();
-    };
-    setTimeout(()=>n.close(),6000);
-  }catch(e){}
+    const icon='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#e8a045"/><text x="32" y="44" font-size="32" text-anchor="middle" font-family="monospace" font-weight="bold" fill="#1a1000">AI</text></svg>');
+    const n=new Notification(title,{body,icon,tag:convKey,renotify:true});
+    n.onclick=()=>{window.focus();openChat(convKey);n.close();};
+  }catch(e){console.warn('Notification error:',e);}
 }
 
 // ── READ RECEIPTS ─────────────────────────────────────────────
-// We store read state in localStorage: ac_read_{userId} = {convKey: lastReadTs}
-function getReadTs(convKey){
-  try{
-    const s=localStorage.getItem('ac_read_'+curUser.id);
-    const m=s?JSON.parse(s):{};
-    return m[convKey]||'';
-  }catch{return '';}
+// Each user stores their own read timestamps in app_config:
+//   key = "read_" + userId   value = JSON {convKey: isoTimestamp}
+// When you open a conv → save timestamp → others see ✓✓ on their msgs
+
+let peerReadTs={};  // convKey -> peer's last read timestamp (loaded from SB)
+
+function getMyReadMap(){
+  try{const s=localStorage.getItem('ac_read_'+curUser.id);return s?JSON.parse(s):{};}catch{return {};}
 }
-function setReadTs(convKey, ts){
+function setMyReadTs(convKey,ts){
   try{
-    const s=localStorage.getItem('ac_read_'+curUser.id);
-    const m=s?JSON.parse(s):{};
-    m[convKey]=ts;
-    localStorage.setItem('ac_read_'+curUser.id, JSON.stringify(m));
+    const m=getMyReadMap();m[convKey]=ts;
+    localStorage.setItem('ac_read_'+curUser.id,JSON.stringify(m));
+    // push to SB so peer can see it
+    sb.upsert('app_config',[{key:'read_'+curUser.id,value:JSON.stringify(m)}],'key').catch(()=>{});
   }catch{}
 }
+async function loadPeerReadTs(convKey){
+  // find peer user id
+  if(convKey.startsWith('g_'))return;
+  const peerId=convKey.split('__dm__').find(id=>id!==curUser.id);
+  if(!peerId)return;
+  try{
+    const rows=await sb.select('app_config','key=eq.'+encodeURIComponent('read_'+peerId));
+    if(rows&&rows[0]){
+      const m=JSON.parse(rows[0].value||'{}');
+      if(m[convKey]) peerReadTs[convKey]=m[convKey];
+    }
+  }catch{}
+}
+function isConvRead(convKey,msgTs){
+  // returns true if peer has read this message
+  const pr=peerReadTs[convKey];
+  return pr&&msgTs&&pr>=msgTs;
+}
 function markConvRead(convKey){
-  setReadTs(convKey, new Date().toISOString());
+  const ts=new Date().toISOString();
+  setMyReadTs(convKey,ts);
   unreadCounts[convKey]=0;
   updateDocTitle();
   renderContacts();
 }
-function getUnread(convKey){
-  return unreadCounts[convKey]||0;
-}
+function getUnread(convKey){return unreadCounts[convKey]||0;}
 function incrementUnread(convKey){
   unreadCounts[convKey]=(unreadCounts[convKey]||0)+1;
   updateDocTitle();
@@ -758,79 +745,132 @@ function launchApp(){
   });
 }
 
+// ── FAST POLLING ENGINE ───────────────────────────────────────
+// Polls every 2s for active chat, 5s for background — instant feel
+let pollTimer=null, lastMsgTs={}, pollActive=false;
+
 async function connectRT(){
   setBadge('⏳ Connecting...');
   try{
-    await loadLastMsgs();
+    await refreshAllConvs();
     setBadge('');
-    subscribeRT();
+    startPolling();
   }catch(e){
-    setBadge('⚠ Connection issue — retrying...',true);
-    setTimeout(connectRT,5000);
+    setBadge('⚠ Retrying...',true);
+    setTimeout(connectRT,4000);
   }
 }
 
-async function loadLastMsgs(){
+async function refreshAllConvs(){
   const keys=[];
   USERS.filter(u=>u.id!==curUser.id).forEach(u=>keys.push(dmKey(curUser.id,u.id)));
   getGroups().forEach(g=>keys.push(g.id));
   if(!keys.length)return;
-  // fetch last message per conv key
-  for(const ck of keys){
-    try{
-      const rows=await sb.select('messages','conv_key=eq.'+encodeURIComponent(ck)+'&order=created_at.desc&limit=1');
-      if(rows&&rows.length){
-        const m=rows[0];
-        const sender=getU(m.sender_id);
-        const prefix=sender&&sender.id!==curUser.id?sender.name.split(' ')[0]+': ':'You: ';
-        lastMsgs[ck]={preview:prefix+(m.content||'📎 File'),ts:m.created_at};
-      }
-    }catch(e){}
-  }
-  renderContacts();
-  updateDocTitle();
-}
-
-function updateDocTitle(){
-  const total=Object.values(unreadCounts).reduce((a,b)=>a+b,0);
-  document.title=total>0?'('+total+') Altius Chat':'Altius Chat';
-}
-
-function subscribeRT(){
-  if(rtCh)sb.removeChannel(rtCh);
-  rtCh=sb.channel('rt-msgs')
-    .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},(payload)=>{
-      const m=payload.data?.record||payload.new||payload;
-      if(!m||!m.conv_key)return;
+  // batch fetch all recent messages in one query
+  const allKeys=keys.map(k=>'"'+k+'"').join(',');
+  const q='conv_key=in.('+allKeys+')&order=created_at.desc&limit='+( keys.length*3);
+  try{
+    const rows=await sb.select('messages',q);
+    if(!rows)return;
+    const seen=new Set();
+    rows.forEach(m=>{
       const ck=m.conv_key;
+      if(seen.has(ck))return;
+      seen.add(ck);
+      const sender=getU(m.sender_id);
+      const isFromMe=m.sender_id===curUser.id;
+      const prefix=sender&&!isFromMe?sender.name.split(' ')[0]+': ':'You: ';
+      lastMsgs[ck]={preview:prefix+(m.content||'📎 File'),ts:m.created_at};
+      // track as known so we don't notify on first load
+      if(!lastMsgTs[ck]) lastMsgTs[ck]=m.created_at;
+    });
+    renderContacts();
+    updateDocTitle();
+  }catch(e){}
+}
+
+function startPolling(){
+  if(pollTimer)clearInterval(pollTimer);
+  // Fast poll: 2s when chat open, 4s otherwise
+  pollTimer=setInterval(pollForMessages, 2000);
+}
+
+let isPolling=false;
+async function pollForMessages(){
+  if(isPolling)return;
+  isPolling=true;
+  try{
+    const keys=[];
+    USERS.filter(u=>u.id!==curUser.id).forEach(u=>keys.push(dmKey(curUser.id,u.id)));
+    getGroups().forEach(g=>keys.push(g.id));
+    if(!keys.length){isPolling=false;return;}
+
+    const allKeys=keys.map(k=>'"'+k+'"').join(',');
+    const q='conv_key=in.('+allKeys+')&order=created_at.desc&limit='+(keys.length*2);
+    const rows=await sb.select('messages',q);
+    if(!rows){isPolling=false;return;}
+
+    let changed=false;
+    const seen=new Set();
+    rows.forEach(m=>{
+      const ck=m.conv_key;
+      if(seen.has(ck))return;
+      seen.add(ck);
+      const prev=lastMsgs[ck];
+      const isNew=!lastMsgTs[ck]||(m.created_at>lastMsgTs[ck]);
       const isFromMe=m.sender_id===curUser.id;
       const sender=getU(m.sender_id);
       const prefix=sender&&!isFromMe?sender.name.split(' ')[0]+': ':'You: ';
       lastMsgs[ck]={preview:prefix+(m.content||'📎 File'),ts:m.created_at};
 
-      // track unread + notify if message is from someone else
-      if(!isFromMe){
-        if(activeConv!==ck){
-          incrementUnread(ck);
-          // fire browser notification
-          const isG=ck.startsWith('g_');
-          const grp=isG?getGroups().find(g=>g.id===ck):null;
-          const notifTitle=isG?(sender?.name.split(' ')[0]+' in '+grp?.name):(sender?.name||'New message');
-          const notifBody=m.content||'📎 Sent a file';
-          sendNotification(notifTitle, notifBody, ck);
-        } else {
-          // conv is open — mark as read immediately
-          markConvRead(ck);
+      if(isNew && lastMsgTs[ck]){
+        // new message arrived
+        lastMsgTs[ck]=m.created_at;
+        changed=true;
+        if(!isFromMe){
+          if(activeConv===ck){
+            // chat is open — reload messages instantly
+            loadAndRenderFast(ck);
+            markConvRead(ck);
+          } else {
+            incrementUnread(ck);
+            // fire notification
+            const isG=ck.startsWith('g_');
+            const grp=isG?getGroups().find(g=>g.id===ck):null;
+            const notifTitle=isG?(sender?.name?.split(' ')[0]+' in '+grp?.name):(sender?.name||'New message');
+            sendNotification(notifTitle, m.content||'📎 Sent a file', ck);
+          }
+        } else if(activeConv===ck){
+          loadAndRenderFast(ck);
         }
+      } else if(!lastMsgTs[ck]){
+        lastMsgTs[ck]=m.created_at;
       }
-
-      renderContacts();
-      if(activeConv===ck) loadAndRender(ck);
-    })
-    .subscribe(status=>{
-      console.log('RT status:',status);
-      if(status==='SUBSCRIBED') setBadge('');
     });
+    if(changed) renderContacts();
+  }catch(e){}
+  // occasionally refresh peer read ts for active conv
+  if(activeConv&&Math.random()<0.3) loadPeerReadTs(activeConv).then(()=>{
+    if(activeConv) loadAndRenderFast(activeConv);
+  });
+  isPolling=false;
+}
+
+// Fast render — no loading spinner, just silently refreshes
+async function loadAndRenderFast(convKey){
+  try{
+    const msgs=await getMessages(convKey);
+    const wrap=document.getElementById('msgs-wrap');
+    const atBottom=wrap.scrollHeight-wrap.scrollTop-wrap.clientHeight<60;
+    renderMsgs(msgs,convKey);
+    if(atBottom) wrap.scrollTop=wrap.scrollHeight;
+  }catch(e){}
+}
+
+function updateDocTitle(){
+  const total=Object.values(unreadCounts).reduce((a,b)=>a+b,0);
+  const co=localStorage.getItem('ac_company')||'Altius';
+  document.title=total>0?'('+total+') '+co+' Chat':co+' Chat';
 }
 
 function getGroups(){
@@ -912,6 +952,7 @@ async function openChat(convKey){
   showScreen('s-chat');
   document.getElementById('msg-in').focus();
   markConvRead(convKey);
+  loadPeerReadTs(convKey);  // async, updates ticks when done
   await loadAndRender(convKey);
 }
 
@@ -927,8 +968,9 @@ async function loadAndRender(convKey){
   try{
     const msgs=await getMessages(convKey);
     renderMsgs(msgs,convKey);
+    wrap.scrollTop=wrap.scrollHeight;
   }catch(e){
-    wrap.innerHTML=`<div style="color:var(--red);padding:20px;font-size:13px;">Could not load messages: ${e.message}</div>`;
+    wrap.innerHTML='<div style="color:var(--red);padding:20px;font-size:13px;">Could not load messages.</div>';
   }
 }
 
@@ -955,9 +997,8 @@ function renderMsgs(msgs,convKey){
       inner.appendChild(bubs);grp.appendChild(inner);
       const tm=document.createElement('div');tm.className='mtime';
       if(isSent){
-        const readTs=getReadTs(convKey);
-        const isRead=readTs&&ts&&readTs>ts;
-        tm.innerHTML=ft(ts)+'<span class="tick '+(isRead?'read':'sent')+'" title="'+(isRead?'Seen':'Delivered')+'">'+(isRead?'✓✓':'✓')+'</span>';
+        const isRead=isConvRead(convKey,ts);
+        tm.innerHTML=ft(ts)+'&nbsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
       } else {
         tm.textContent=ft(ts);
       }
@@ -970,9 +1011,8 @@ function renderMsgs(msgs,convKey){
       const tm=lg?.querySelector('.mtime');
       if(tm){
         if(isSent){
-          const readTs=getReadTs(convKey);
-          const isRead=readTs&&ts&&readTs>ts;
-          tm.innerHTML=ft(ts)+'<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
+          const isRead=isConvRead(convKey,ts);
+          tm.innerHTML=ft(ts)+'&nbsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
         } else {
           tm.textContent=ft(ts);
         }
@@ -1003,18 +1043,28 @@ async function sendMsg(){
   if(!text&&!pendingFiles.length)return;
   const btn=document.getElementById('send-btn');
   btn.disabled=true;
+
+  // optimistic: clear input immediately
+  const savedText=text;
+  if(text){inp.value='';inp.style.height='';}
+
   try{
     for(const pf of pendingFiles) await uploadFile(pf.file);
     if(pendingFiles.length){pendingFiles=[];document.getElementById('fp-row').innerHTML='';}
-    if(text){
-      await postMessage(activeConv,{content:text});
-      inp.value='';inp.style.height='';
+    if(savedText){
+      await postMessage(activeConv,{content:savedText});
     }
-    await loadAndRender(activeConv);
-    document.getElementById('msgs-wrap').scrollTop=9999;
+    // update lastMsgTs so polling knows this is already seen
+    lastMsgTs[activeConv]=new Date().toISOString();
+    await loadAndRenderFast(activeConv);
+    // update contact preview
+    const sender=curUser;
+    lastMsgs[activeConv]={preview:'You: '+(savedText||'📎 File'),ts:new Date().toISOString()};
+    renderContacts();
   }catch(e){
     toast('⚠ Failed to send: '+e.message);
-    console.error('sendMsg error:',e);
+    // restore text on failure
+    if(savedText) inp.value=savedText;
   }finally{
     btn.disabled=false;inp.focus();
   }
