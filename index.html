@@ -259,6 +259,30 @@ textarea{-webkit-appearance:none;}
 
 @keyframes bIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .banim{animation:bIn .18s ease;}
+
+/* Read receipts */
+.tick{font-size:11px;margin-left:3px;}
+.tick.sent{color:rgba(26,16,0,0.5);}
+.tick.read{color:#1a1000;}
+.tick.recv{color:var(--text3);}
+
+/* Unread badge on contact row */
+.unread-dot{
+  width:20px;height:20px;border-radius:50%;
+  background:var(--accent);color:#1a1000;
+  font-size:11px;font-weight:700;font-family:var(--mono);
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;margin-left:4px;
+}
+
+/* Notification permission banner */
+#notif-banner{
+  background:var(--bg3);border-bottom:1px solid var(--border);
+  padding:10px 16px;display:none;align-items:center;gap:10px;flex-shrink:0;
+}
+#notif-banner p{font-size:13px;color:var(--text2);flex:1;line-height:1.4;}
+.notif-allow{background:var(--accent);color:#1a1000;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:var(--font);white-space:nowrap;}
+.notif-deny{background:none;border:none;color:var(--text3);font-size:18px;cursor:pointer;padding:4px;}
 </style>
 </head>
 <body>
@@ -332,6 +356,11 @@ textarea{-webkit-appearance:none;}
     <button class="ab-btn" onclick="doLogout()" style="font-size:17px;" title="Sign out">⏻</button>
   </div>
   <div id="conn-badge"></div>
+  <div id="notif-banner">
+    <p>Enable notifications to get alerts when teammates message you.</p>
+    <button class="notif-allow" onclick="requestNotifPermission()">Enable</button>
+    <button class="notif-deny" onclick="dismissNotifBanner()">✕</button>
+  </div>
   <div class="search-wrap"><input class="search-in" placeholder="🔍  Search..." oninput="renderContacts(this.value)"></div>
   <div class="cscroll" id="cscroll"></div>
   <div class="me-bar">
@@ -497,6 +526,8 @@ let USERS=[], curUser=null, activeConv=null;
 let convMap={}, lastMsgs={}, pendingFiles=[], rtCh=null;
 let isMuted=false,isCamOff=false,callTimer=null,cs=0,cc=null;
 let editId=null, selCol=0;
+let unreadCounts={};  // convKey -> count
+let notifPermission='default';
 
 // ── COLORS ────────────────────────────────────────────────────
 const COLORS=[
@@ -625,6 +656,88 @@ function doLogout(){
   showScreen('s-login');
 }
 
+// ── NOTIFICATIONS ────────────────────────────────────────────
+function initNotifications(){
+  if(!('Notification' in window))return;
+  notifPermission=Notification.permission;
+  if(notifPermission==='default'){
+    // show banner after 3 seconds
+    setTimeout(()=>{
+      if(Notification.permission==='default'){
+        document.getElementById('notif-banner').style.display='flex';
+      }
+    },3000);
+  }
+}
+
+function requestNotifPermission(){
+  dismissNotifBanner();
+  if(!('Notification' in window)){toast('Notifications not supported on this browser');return;}
+  Notification.requestPermission().then(p=>{
+    notifPermission=p;
+    if(p==='granted') toast('✓ Notifications enabled!');
+    else toast('Notifications blocked. Enable in browser settings.');
+  });
+}
+
+function dismissNotifBanner(){
+  document.getElementById('notif-banner').style.display='none';
+  localStorage.setItem('ac_notif_dismissed','1');
+}
+
+function sendNotification(title, body, convKey){
+  // Don't notify if app is focused and that conv is open
+  if(document.visibilityState==='visible' && activeConv===convKey) return;
+  if(!('Notification' in window)||Notification.permission!=='granted') return;
+  try{
+    const n=new Notification(title,{
+      body:body,
+      icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="%23e8a045"/><text x="50%" y="55%" font-size="20" text-anchor="middle" dominant-baseline="middle" font-family="monospace" font-weight="bold" fill="%231a1000">AI</text></svg>',
+      badge:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="%23e8a045"/></svg>',
+      tag:convKey,
+      renotify:true,
+      silent:false,
+    });
+    n.onclick=()=>{
+      window.focus();
+      openChat(convKey);
+      n.close();
+    };
+    setTimeout(()=>n.close(),6000);
+  }catch(e){}
+}
+
+// ── READ RECEIPTS ─────────────────────────────────────────────
+// We store read state in localStorage: ac_read_{userId} = {convKey: lastReadTs}
+function getReadTs(convKey){
+  try{
+    const s=localStorage.getItem('ac_read_'+curUser.id);
+    const m=s?JSON.parse(s):{};
+    return m[convKey]||'';
+  }catch{return '';}
+}
+function setReadTs(convKey, ts){
+  try{
+    const s=localStorage.getItem('ac_read_'+curUser.id);
+    const m=s?JSON.parse(s):{};
+    m[convKey]=ts;
+    localStorage.setItem('ac_read_'+curUser.id, JSON.stringify(m));
+  }catch{}
+}
+function markConvRead(convKey){
+  setReadTs(convKey, new Date().toISOString());
+  unreadCounts[convKey]=0;
+  updateDocTitle();
+  renderContacts();
+}
+function getUnread(convKey){
+  return unreadCounts[convKey]||0;
+}
+function incrementUnread(convKey){
+  unreadCounts[convKey]=(unreadCounts[convKey]||0)+1;
+  updateDocTitle();
+}
+
 // ── APP LAUNCH ────────────────────────────────────────────────
 function launchApp(){
   const co=localStorage.getItem('ac_company')||'Altius';
@@ -637,6 +750,12 @@ function launchApp(){
   showScreen('s-contacts');
   renderContacts();
   connectRT();
+  // init notifications (skip if user already dismissed)
+  if(!localStorage.getItem('ac_notif_dismissed')) initNotifications();
+  // handle visibility change — mark read when user comes back to app
+  document.addEventListener('visibilitychange',()=>{
+    if(document.visibilityState==='visible'&&activeConv) markConvRead(activeConv);
+  });
 }
 
 async function connectRT(){
@@ -669,6 +788,12 @@ async function loadLastMsgs(){
     }catch(e){}
   }
   renderContacts();
+  updateDocTitle();
+}
+
+function updateDocTitle(){
+  const total=Object.values(unreadCounts).reduce((a,b)=>a+b,0);
+  document.title=total>0?'('+total+') Altius Chat':'Altius Chat';
 }
 
 function subscribeRT(){
@@ -678,9 +803,27 @@ function subscribeRT(){
       const m=payload.data?.record||payload.new||payload;
       if(!m||!m.conv_key)return;
       const ck=m.conv_key;
+      const isFromMe=m.sender_id===curUser.id;
       const sender=getU(m.sender_id);
-      const prefix=sender&&sender.id!==curUser.id?sender.name.split(' ')[0]+': ':'You: ';
+      const prefix=sender&&!isFromMe?sender.name.split(' ')[0]+': ':'You: ';
       lastMsgs[ck]={preview:prefix+(m.content||'📎 File'),ts:m.created_at};
+
+      // track unread + notify if message is from someone else
+      if(!isFromMe){
+        if(activeConv!==ck){
+          incrementUnread(ck);
+          // fire browser notification
+          const isG=ck.startsWith('g_');
+          const grp=isG?getGroups().find(g=>g.id===ck):null;
+          const notifTitle=isG?(sender?.name.split(' ')[0]+' in '+grp?.name):(sender?.name||'New message');
+          const notifBody=m.content||'📎 Sent a file';
+          sendNotification(notifTitle, notifBody, ck);
+        } else {
+          // conv is open — mark as read immediately
+          markConvRead(ck);
+        }
+      }
+
       renderContacts();
       if(activeConv===ck) loadAndRender(ck);
     })
@@ -714,7 +857,7 @@ function renderContacts(filter=''){
 
   getGroups().filter(g=>!fl||g.name.toLowerCase().includes(fl)).forEach(g=>{
     const ck=g.id;const last=lastMsgs[ck];
-    scroll.appendChild(mkRow({icon:g.icon,isGrp:true,name:g.name,preview:last?last.preview:g.desc,ts:last?.ts,onclick:()=>openChat(ck)}));
+    scroll.appendChild(mkRow({icon:g.icon,isGrp:true,name:g.name,preview:last?last.preview:g.desc,ts:last?.ts,convKey:ck,onclick:()=>openChat(ck)}));
   });
 
   if(USERS.filter(u=>u.id!==curUser.id&&(!fl||u.name.toLowerCase().includes(fl)||u.role.toLowerCase().includes(fl))).length){
@@ -723,11 +866,12 @@ function renderContacts(filter=''){
 
   USERS.filter(u=>u.id!==curUser.id&&(!fl||u.name.toLowerCase().includes(fl)||u.role.toLowerCase().includes(fl))).forEach(u=>{
     const ck=dmKey(curUser.id,u.id);const last=lastMsgs[ck];
-    scroll.appendChild(mkRow({initials:ini(u.name),color:u.c||u.color,bg:u.bg,dot:true,name:u.name,preview:last?last.preview:u.role,ts:last?.ts,onclick:()=>openChat(ck)}));
+    scroll.appendChild(mkRow({initials:ini(u.name),color:u.c||u.color,bg:u.bg,dot:true,name:u.name,preview:last?last.preview:u.role,ts:last?.ts,convKey:ck,onclick:()=>openChat(ck)}));
   });
 }
 
-function mkRow({icon,initials,color,bg,dot,isGrp,name,preview,ts,onclick}){
+function mkRow({icon,initials,color,bg,dot,isGrp,name,preview,ts,onclick,convKey}){
+  const unread=convKey?getUnread(convKey):0;
   const row=document.createElement('div');row.className='crow';row.onclick=onclick;
   const aw=document.createElement('div');aw.className='av-wrap';
   const ai=document.createElement('div');ai.className='av-in'+(isGrp?' grp':'');
@@ -737,8 +881,18 @@ function mkRow({icon,initials,color,bg,dot,isGrp,name,preview,ts,onclick}){
   if(dot){const d=document.createElement('div');d.className='av-dot';aw.appendChild(d);}
   row.appendChild(aw);
   const ci=document.createElement('div');ci.className='cinfo';
-  ci.innerHTML=`<div class="crow-top"><div class="cname">${esc(name)}</div><div class="ctime">${ts?ft(ts):''}</div></div><div class="cprev">${esc(preview||'')}</div>`;
-  row.appendChild(ci);return row;
+  // bold name if unread
+  const nameStyle=unread>0?'font-weight:600;color:var(--text);':'';
+  const prevStyle=unread>0?'color:var(--text2);':'';
+  ci.innerHTML=`<div class="crow-top"><div class="cname" style="${nameStyle}">${esc(name)}</div><div class="ctime">${ts?ft(ts):''}</div></div><div class="cprev" style="${prevStyle}">${esc(preview||'')}</div>`;
+  row.appendChild(ci);
+  // unread badge
+  if(unread>0){
+    const badge=document.createElement('div');badge.className='unread-dot';
+    badge.textContent=unread>99?'99+':unread;
+    row.appendChild(badge);
+  }
+  return row;
 }
 
 // ── CHAT ──────────────────────────────────────────────────────
@@ -757,6 +911,7 @@ async function openChat(convKey){
 
   showScreen('s-chat');
   document.getElementById('msg-in').focus();
+  markConvRead(convKey);
   await loadAndRender(convKey);
 }
 
@@ -798,14 +953,30 @@ function renderMsgs(msgs,convKey){
       if(!isSent&&isG&&sender&&newGrp){const t=document.createElement('div');t.className='stag';t.textContent=sender.name.split(' ')[0];bubs.appendChild(t);}
       addBub(bubs,msg,isSent);
       inner.appendChild(bubs);grp.appendChild(inner);
-      const tm=document.createElement('div');tm.className='mtime';tm.textContent=ft(ts)+(isSent?' ✓':'');grp.appendChild(tm);
+      const tm=document.createElement('div');tm.className='mtime';
+      if(isSent){
+        const readTs=getReadTs(convKey);
+        const isRead=readTs&&ts&&readTs>ts;
+        tm.innerHTML=ft(ts)+'<span class="tick '+(isRead?'read':'sent')+'" title="'+(isRead?'Seen':'Delivered')+'">'+(isRead?'✓✓':'✓')+'</span>';
+      } else {
+        tm.textContent=ft(ts);
+      }
+      grp.appendChild(tm);
       wrap.appendChild(grp);
     } else {
       const lg=wrap.lastElementChild;
       const bubs=lg?.querySelector('.bubbles');
       if(bubs)addBub(bubs,msg,isSent);
       const tm=lg?.querySelector('.mtime');
-      if(tm)tm.textContent=ft(ts)+(isSent?' ✓':'');
+      if(tm){
+        if(isSent){
+          const readTs=getReadTs(convKey);
+          const isRead=readTs&&ts&&readTs>ts;
+          tm.innerHTML=ft(ts)+'<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
+        } else {
+          tm.textContent=ft(ts);
+        }
+      }
     }
     lastSender=msg.sender_id;lastTs=ts;
   });
