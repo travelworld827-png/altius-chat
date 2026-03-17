@@ -629,101 +629,7 @@ function doLogout(){
   showScreen('s-login');
 }
 
-// ── NOTIFICATIONS ────────────────────────────────────────────
-function initNotifications(){
-  if(!('Notification' in window))return;
-  notifPermission=Notification.permission;
-  if(notifPermission==='default'){
-    // show banner after 3 seconds
-    setTimeout(()=>{
-      if(Notification.permission==='default'){
-        document.getElementById('notif-banner').style.display='flex';
-      }
-    },3000);
-  }
-}
 
-function requestNotifPermission(){
-  dismissNotifBanner();
-  if(!('Notification' in window)){toast('Notifications not supported on this browser');return;}
-  Notification.requestPermission().then(p=>{
-    notifPermission=p;
-    if(p==='granted') toast('✓ Notifications enabled!');
-    else toast('Notifications blocked. Enable in browser settings.');
-  });
-}
-
-function dismissNotifBanner(){
-  document.getElementById('notif-banner').style.display='none';
-  localStorage.setItem('ac_notif_dismissed','1');
-}
-
-function sendNotification(title, body, convKey){
-  if(document.visibilityState==='visible'&&activeConv===convKey)return;
-  if(!('Notification' in window)||Notification.permission!=='granted'){
-    // fallback: flash tab title
-    let flashes=0;const orig=document.title;
-    const iv=setInterval(()=>{
-      document.title=flashes%2===0?'💬 '+title:orig;
-      if(++flashes>6){clearInterval(iv);document.title=orig;}
-    },600);
-    return;
-  }
-  try{
-    const icon='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="16" fill="#e8a045"/><text x="32" y="44" font-size="32" text-anchor="middle" font-family="monospace" font-weight="bold" fill="#1a1000">AI</text></svg>');
-    const n=new Notification(title,{body,icon,tag:convKey,renotify:true});
-    n.onclick=()=>{window.focus();openChat(convKey);n.close();};
-  }catch(e){console.warn('Notification error:',e);}
-}
-
-// ── READ RECEIPTS ─────────────────────────────────────────────
-// Each user stores their own read timestamps in app_config:
-//   key = "read_" + userId   value = JSON {convKey: isoTimestamp}
-// When you open a conv → save timestamp → others see ✓✓ on their msgs
-
-let peerReadTs={};  // convKey -> peer's last read timestamp (loaded from SB)
-
-function getMyReadMap(){
-  try{const s=localStorage.getItem('ac_read_'+curUser.id);return s?JSON.parse(s):{};}catch{return {};}
-}
-function setMyReadTs(convKey,ts){
-  try{
-    const m=getMyReadMap();m[convKey]=ts;
-    localStorage.setItem('ac_read_'+curUser.id,JSON.stringify(m));
-    // push to SB so peer can see it
-    sb.upsert('app_config',[{key:'read_'+curUser.id,value:JSON.stringify(m)}],'key').catch(()=>{});
-  }catch{}
-}
-async function loadPeerReadTs(convKey){
-  // find peer user id
-  if(convKey.startsWith('g_'))return;
-  const peerId=convKey.split('__dm__').find(id=>id!==curUser.id);
-  if(!peerId)return;
-  try{
-    const rows=await sb.select('app_config','key=eq.'+encodeURIComponent('read_'+peerId));
-    if(rows&&rows[0]){
-      const m=JSON.parse(rows[0].value||'{}');
-      if(m[convKey]) peerReadTs[convKey]=m[convKey];
-    }
-  }catch{}
-}
-function isConvRead(convKey,msgTs){
-  // returns true if peer has read this message
-  const pr=peerReadTs[convKey];
-  return pr&&msgTs&&pr>=msgTs;
-}
-function markConvRead(convKey){
-  const ts=new Date().toISOString();
-  setMyReadTs(convKey,ts);
-  unreadCounts[convKey]=0;
-  updateDocTitle();
-  renderContacts();
-}
-function getUnread(convKey){return unreadCounts[convKey]||0;}
-function incrementUnread(convKey){
-  unreadCounts[convKey]=(unreadCounts[convKey]||0)+1;
-  updateDocTitle();
-}
 
 // ── APP LAUNCH ────────────────────────────────────────────────
 function launchApp(){
@@ -738,130 +644,133 @@ function launchApp(){
   renderContacts();
   connectRT();
   // init notifications (skip if user already dismissed)
-  if(!localStorage.getItem('ac_notif_dismissed')) initNotifications();
+  initNotifications();
   // handle visibility change — mark read when user comes back to app
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'&&activeConv) markConvRead(activeConv);
   });
 }
 
-// ── FAST POLLING ENGINE ───────────────────────────────────────
-// Polls every 2s for active chat, 5s for background — instant feel
-let pollTimer=null, lastMsgTs={}, pollActive=false;
+// ── REALTIME ENGINE ──────────────────────────────────────────
+// Uses 1-second polling for active chat, 3-second for background.
+// Notifications fire even when app tab is not visible.
+
+let pollTimer=null, lastMsgTs={};
+let isPolling=false;
+
+function convKeys(){
+  const keys=[];
+  USERS.filter(u=>u.id!==curUser.id).forEach(u=>keys.push(dmKey(curUser.id,u.id)));
+  getGroups().forEach(g=>keys.push(g.id));
+  return keys;
+}
 
 async function connectRT(){
   setBadge('⏳ Connecting...');
   try{
-    await refreshAllConvs();
+    await seedLastMsgs();
     setBadge('');
-    startPolling();
+    if(pollTimer) clearInterval(pollTimer);
+    pollTimer=setInterval(poll, 1500);  // poll every 1.5 seconds
   }catch(e){
     setBadge('⚠ Retrying...',true);
     setTimeout(connectRT,4000);
   }
 }
 
-async function refreshAllConvs(){
-  const keys=[];
-  USERS.filter(u=>u.id!==curUser.id).forEach(u=>keys.push(dmKey(curUser.id,u.id)));
-  getGroups().forEach(g=>keys.push(g.id));
-  if(!keys.length)return;
-  // batch fetch all recent messages in one query
-  const allKeys=keys.map(k=>'"'+k+'"').join(',');
-  const q='conv_key=in.('+allKeys+')&order=created_at.desc&limit='+( keys.length*3);
+async function seedLastMsgs(){
+  const keys=convKeys();
+  if(!keys.length) return;
+  const rows=await fetchLatestPerConv(keys);
+  rows.forEach(m=>{
+    const ck=m.conv_key;
+    const sender=getU(m.sender_id);
+    const isMe=m.sender_id===curUser.id;
+    lastMsgs[ck]={preview:(isMe?'You: ':sender?sender.name.split(' ')[0]+': ':'')+( m.content||'📎 File'),ts:m.created_at};
+    lastMsgTs[ck]=m.created_at;  // mark as already known — no notifications on seed
+  });
+  renderContacts();
+  updateDocTitle();
+}
+
+async function fetchLatestPerConv(keys){
+  if(!keys.length) return [];
+  const keyList=keys.map(k=>'"'+k+'"').join(',');
+  const q='conv_key=in.('+keyList+')&order=created_at.desc&limit='+(keys.length*5);
   try{
     const rows=await sb.select('messages',q);
-    if(!rows)return;
-    const seen=new Set();
-    rows.forEach(m=>{
-      const ck=m.conv_key;
-      if(seen.has(ck))return;
-      seen.add(ck);
-      const sender=getU(m.sender_id);
-      const isFromMe=m.sender_id===curUser.id;
-      const prefix=sender&&!isFromMe?sender.name.split(' ')[0]+': ':'You: ';
-      lastMsgs[ck]={preview:prefix+(m.content||'📎 File'),ts:m.created_at};
-      // track as known so we don't notify on first load
-      if(!lastMsgTs[ck]) lastMsgTs[ck]=m.created_at;
-    });
-    renderContacts();
-    updateDocTitle();
-  }catch(e){}
+    if(!rows) return [];
+    // dedupe — keep only latest per conv
+    const seen=new Set(), out=[];
+    rows.forEach(m=>{ if(!seen.has(m.conv_key)){seen.add(m.conv_key);out.push(m);} });
+    return out;
+  }catch(e){ return []; }
 }
 
-function startPolling(){
-  if(pollTimer)clearInterval(pollTimer);
-  // Fast poll: 2s when chat open, 4s otherwise
-  pollTimer=setInterval(pollForMessages, 2000);
-}
-
-let isPolling=false;
-async function pollForMessages(){
-  if(isPolling)return;
+async function poll(){
+  if(isPolling) return;
   isPolling=true;
   try{
-    const keys=[];
-    USERS.filter(u=>u.id!==curUser.id).forEach(u=>keys.push(dmKey(curUser.id,u.id)));
-    getGroups().forEach(g=>keys.push(g.id));
-    if(!keys.length){isPolling=false;return;}
+    const keys=convKeys();
+    if(!keys.length){ isPolling=false; return; }
 
-    const allKeys=keys.map(k=>'"'+k+'"').join(',');
-    const q='conv_key=in.('+allKeys+')&order=created_at.desc&limit='+(keys.length*2);
-    const rows=await sb.select('messages',q);
-    if(!rows){isPolling=false;return;}
+    const rows=await fetchLatestPerConv(keys);
+    let contactsChanged=false;
 
-    let changed=false;
-    const seen=new Set();
-    rows.forEach(m=>{
+    for(const m of rows){
       const ck=m.conv_key;
-      if(seen.has(ck))return;
-      seen.add(ck);
-      const prev=lastMsgs[ck];
-      const isNew=!lastMsgTs[ck]||(m.created_at>lastMsgTs[ck]);
-      const isFromMe=m.sender_id===curUser.id;
+      const known=lastMsgTs[ck];
+      const isNew=known && m.created_at > known;
+      const isMe=m.sender_id===curUser.id;
       const sender=getU(m.sender_id);
-      const prefix=sender&&!isFromMe?sender.name.split(' ')[0]+': ':'You: ';
-      lastMsgs[ck]={preview:prefix+(m.content||'📎 File'),ts:m.created_at};
 
-      if(isNew && lastMsgTs[ck]){
-        // new message arrived
+      // always update preview
+      lastMsgs[ck]={
+        preview:(isMe?'You: ':sender?sender.name.split(' ')[0]+': ':'')+( m.content||'📎 File'),
+        ts:m.created_at
+      };
+      contactsChanged=true;
+
+      if(isNew){
         lastMsgTs[ck]=m.created_at;
-        changed=true;
-        if(!isFromMe){
+        if(!isMe){
           if(activeConv===ck){
-            // chat is open — reload messages instantly
-            loadAndRenderFast(ck);
+            // user is IN this chat — silently reload
+            silentReload(ck);
             markConvRead(ck);
           } else {
+            // user is NOT in this chat — increment badge + notify
             incrementUnread(ck);
-            // fire notification
             const isG=ck.startsWith('g_');
             const grp=isG?getGroups().find(g=>g.id===ck):null;
-            const notifTitle=isG?(sender?.name?.split(' ')[0]+' in '+grp?.name):(sender?.name||'New message');
-            sendNotification(notifTitle, m.content||'📎 Sent a file', ck);
+            const title=isG&&grp?(sender?.name?.split(' ')[0]||'Someone')+' in '+grp.name:(sender?.name||'New message');
+            fireNotification(title, m.content||'📎 Sent a file', ck);
           }
         } else if(activeConv===ck){
-          loadAndRenderFast(ck);
+          silentReload(ck);
         }
-      } else if(!lastMsgTs[ck]){
+      } else if(!known){
         lastMsgTs[ck]=m.created_at;
       }
-    });
-    if(changed) renderContacts();
+    }
+
+    if(contactsChanged) renderContacts();
+
+    // poll read receipts for active DM conv (every ~5 polls = every 7.5s)
+    if(activeConv && !activeConv.startsWith('g_') && Math.random()<0.2){
+      await refreshPeerRead(activeConv);
+    }
+
   }catch(e){}
-  // occasionally refresh peer read ts for active conv
-  if(activeConv&&Math.random()<0.3) loadPeerReadTs(activeConv).then(()=>{
-    if(activeConv) loadAndRenderFast(activeConv);
-  });
   isPolling=false;
 }
 
-// Fast render — no loading spinner, just silently refreshes
-async function loadAndRenderFast(convKey){
+// Silent refresh — keeps scroll position, no loading flash
+async function silentReload(convKey){
   try{
-    const msgs=await getMessages(convKey);
     const wrap=document.getElementById('msgs-wrap');
-    const atBottom=wrap.scrollHeight-wrap.scrollTop-wrap.clientHeight<60;
+    const atBottom=wrap.scrollHeight-wrap.scrollTop-wrap.clientHeight<80;
+    const msgs=await getMessages(convKey);
     renderMsgs(msgs,convKey);
     if(atBottom) wrap.scrollTop=wrap.scrollHeight;
   }catch(e){}
@@ -871,6 +780,122 @@ function updateDocTitle(){
   const total=Object.values(unreadCounts).reduce((a,b)=>a+b,0);
   const co=localStorage.getItem('ac_company')||'Altius';
   document.title=total>0?'('+total+') '+co+' Chat':co+' Chat';
+}
+
+// ── READ RECEIPTS ─────────────────────────────────────────────
+// Stored in app_config: key="read_<userId>"  value=JSON{convKey:isoTs}
+// When you open a conv → save your timestamp to SB
+// Sender polls peer's timestamp → shows ✓✓ when peer timestamp >= msg timestamp
+
+let peerReadTs={};
+
+function getMyReadMap(){
+  try{ const s=localStorage.getItem('ac_read_'+curUser.id); return s?JSON.parse(s):{}; }
+  catch{ return {}; }
+}
+
+function markConvRead(convKey){
+  const ts=new Date().toISOString();
+  // save locally
+  try{
+    const m=getMyReadMap();
+    m[convKey]=ts;
+    localStorage.setItem('ac_read_'+curUser.id,JSON.stringify(m));
+    // push to SB async — don't await
+    sb.upsert('app_config',[{key:'read_'+curUser.id,value:JSON.stringify(m)}],'key').catch(()=>{});
+  }catch{}
+  // clear unread badge
+  unreadCounts[convKey]=0;
+  updateDocTitle();
+  renderContacts();
+}
+
+async function refreshPeerRead(convKey){
+  if(convKey.startsWith('g_')) return;
+  const peerId=convKey.split('__dm__').find(id=>id!==curUser.id);
+  if(!peerId) return;
+  try{
+    const rows=await sb.select('app_config','key=eq.read_'+encodeURIComponent(peerId));
+    if(rows&&rows[0]){
+      const m=JSON.parse(rows[0].value||'{}');
+      const prev=peerReadTs[convKey];
+      if(m[convKey]&&m[convKey]!==prev){
+        peerReadTs[convKey]=m[convKey];
+        // refresh ticks in current chat
+        if(activeConv===convKey) silentReload(convKey);
+      }
+    }
+  }catch{}
+}
+
+function isReadByPeer(convKey,msgTs){
+  const pr=peerReadTs[convKey];
+  if(!pr||!msgTs) return false;
+  return pr >= msgTs;
+}
+
+function getUnread(convKey){ return unreadCounts[convKey]||0; }
+
+function incrementUnread(convKey){
+  unreadCounts[convKey]=(unreadCounts[convKey]||0)+1;
+  updateDocTitle();
+}
+
+// ── NOTIFICATIONS ─────────────────────────────────────────────
+function initNotifications(){
+  if(!('Notification' in window)) return;
+  if(Notification.permission==='default'&&!localStorage.getItem('ac_notif_dismissed')){
+    setTimeout(()=>{
+      if(Notification.permission==='default')
+        document.getElementById('notif-banner').style.display='flex';
+    },3000);
+  }
+}
+
+function requestNotifPermission(){
+  dismissNotifBanner();
+  if(!('Notification' in window)){toast('Notifications not supported in this browser');return;}
+  Notification.requestPermission().then(p=>{
+    if(p==='granted') toast('✓ Notifications enabled!');
+    else toast('Blocked. Enable in browser/phone settings.');
+  });
+}
+
+function dismissNotifBanner(){
+  document.getElementById('notif-banner').style.display='none';
+  localStorage.setItem('ac_notif_dismissed','1');
+}
+
+function fireNotification(title, body, convKey){
+  // ALWAYS show notification regardless of visibility
+  // (user may be in a different tab or the phone screen is on but on contacts)
+  if(document.visibilityState==='visible'&&activeConv===convKey) return;
+
+  if(Notification.permission==='granted'){
+    try{
+      const icon='data:image/svg+xml,'+encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'+
+        '<rect width="64" height="64" rx="16" fill="#e8a045"/>'+
+        '<text x="32" y="44" font-size="30" text-anchor="middle" '+
+        'font-family="monospace" font-weight="bold" fill="#1a1000">AI</text></svg>'
+      );
+      const n=new Notification(title,{
+        body:body,
+        icon:icon,
+        tag:convKey,        // replaces previous notif for same conv
+        renotify:true,      // vibrate even if same tag
+        requireInteraction:false,
+      });
+      n.onclick=()=>{ window.focus(); openChat(convKey); n.close(); };
+    }catch(e){}
+  } else {
+    // Flash title as fallback
+    let i=0; const orig=document.title;
+    const iv=setInterval(()=>{
+      document.title=i++%2===0?'💬 '+title:orig;
+      if(i>8){clearInterval(iv);document.title=updateDocTitle();}
+    },500);
+  }
 }
 
 function getGroups(){
@@ -997,7 +1022,7 @@ function renderMsgs(msgs,convKey){
       inner.appendChild(bubs);grp.appendChild(inner);
       const tm=document.createElement('div');tm.className='mtime';
       if(isSent){
-        const isRead=isConvRead(convKey,ts);
+        const isRead=isReadByPeer(convKey,ts);
         tm.innerHTML=ft(ts)+'&nbsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
       } else {
         tm.textContent=ft(ts);
@@ -1011,7 +1036,7 @@ function renderMsgs(msgs,convKey){
       const tm=lg?.querySelector('.mtime');
       if(tm){
         if(isSent){
-          const isRead=isConvRead(convKey,ts);
+          const isRead=isReadByPeer(convKey,ts);
           tm.innerHTML=ft(ts)+'&nbsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
         } else {
           tm.textContent=ft(ts);
