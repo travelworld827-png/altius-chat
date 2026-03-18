@@ -263,6 +263,47 @@ textarea{-webkit-appearance:none;}
 @keyframes bIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .banim{animation:bIn .18s ease;}
 
+/* Avatar helpers */
+.av-img{width:100%;height:100%;object-fit:cover;border-radius:50%;}
+.av-img.grp-img{border-radius:14px;}
+
+/* Profile picture modal */
+#profile-modal{
+  position:fixed;inset:0;background:rgba(0,0,0,0.6);
+  display:none;align-items:center;justify-content:center;z-index:400;padding:24px;
+}
+#profile-modal.show{display:flex;}
+.profile-card{
+  background:#ffffff;border-radius:20px;padding:28px 24px;
+  width:100%;max-width:320px;display:flex;flex-direction:column;gap:20px;
+  align-items:center;
+}
+.profile-av-wrap{
+  position:relative;width:100px;height:100px;cursor:pointer;
+}
+.profile-av-big{
+  width:100px;height:100px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:36px;font-weight:600;font-family:var(--mono);
+  overflow:hidden;
+}
+.profile-av-edit{
+  position:absolute;bottom:2px;right:2px;width:30px;height:30px;border-radius:50%;
+  background:#e8a045;display:flex;align-items:center;justify-content:center;
+  font-size:14px;border:2px solid #ffffff;cursor:pointer;
+}
+.profile-name{font-size:18px;font-weight:600;color:#111418;text-align:center;}
+.profile-role{font-size:13px;color:#65676b;text-align:center;margin-top:-12px;}
+.profile-save{
+  width:100%;background:#e8a045;color:#1a1000;border:none;border-radius:12px;
+  padding:13px;font-size:15px;font-weight:600;cursor:pointer;font-family:var(--font);
+}
+.profile-save:disabled{opacity:.5;}
+.profile-close{
+  width:100%;background:#f0f2f5;border:none;border-radius:12px;
+  padding:11px;font-size:14px;cursor:pointer;font-family:var(--font);color:#65676b;
+}
+.profile-hint{font-size:12px;color:#8a8d91;text-align:center;}
+
 /* Clear chat confirm overlay */
 .confirm-ov{
   position:fixed;inset:0;background:rgba(0,0,0,0.5);
@@ -395,9 +436,30 @@ textarea{-webkit-appearance:none;}
   </div>
   <div class="search-wrap"><input class="search-in" placeholder="🔍  Search..." oninput="renderContacts(this.value)"></div>
   <div class="cscroll" id="cscroll"></div>
-  <div class="me-bar">
-    <div class="me-av" id="me-av"></div>
-    <div style="flex:1;"><div style="font-size:13px;font-weight:600;" id="me-name"></div><div style="font-size:11px;color:var(--text3);" id="me-role"></div></div>
+  <div class="me-bar" onclick="openProfileModal()" style="cursor:pointer;" title="Edit your profile">
+    <div class="me-av" id="me-av" style="overflow:hidden;"></div>
+    <div style="flex:1;">
+      <div style="font-size:13px;font-weight:600;" id="me-name"></div>
+      <div style="font-size:11px;color:var(--text3);" id="me-role"></div>
+    </div>
+    <div style="font-size:18px;color:#8a8d91;">✎</div>
+  </div>
+</div>
+
+<!-- PROFILE PICTURE MODAL -->
+<div id="profile-modal">
+  <div class="profile-card">
+    <div style="font-size:15px;font-weight:600;color:#111418;align-self:flex-start;">My Profile</div>
+    <div class="profile-av-wrap" onclick="document.getElementById('pic-input').click()">
+      <div class="profile-av-big" id="profile-av-big"></div>
+      <div class="profile-av-edit">📷</div>
+    </div>
+    <input type="file" id="pic-input" accept="image/*" style="display:none" onchange="handleProfilePic(this)">
+    <div class="profile-name" id="profile-modal-name"></div>
+    <div class="profile-role" id="profile-modal-role"></div>
+    <div class="profile-hint">Tap your photo to change it.<br>Your picture is visible to all team members.</div>
+    <button class="profile-save" id="profile-save-btn" onclick="saveProfilePic()" style="display:none;">Save Photo</button>
+    <button class="profile-close" onclick="closeProfileModal()">Close</button>
   </div>
 </div>
 
@@ -714,13 +776,15 @@ function doLogout(){
 function launchApp(){
   const co=localStorage.getItem('ac_company')||'Altius';
   document.getElementById('app-title').textContent=co+' Chat';
-  const av=document.getElementById('me-av');
-  av.textContent=ini(curUser.name);av.style.background=curUser.bg;av.style.color=curUser.c||curUser.color;
   document.getElementById('me-name').textContent=curUser.name;
   document.getElementById('me-role').textContent=curUser.role;
   document.getElementById('admin-btn').style.display=curUser.admin?'flex':'none';
   showScreen('s-contacts');
-  renderContacts();
+  // load profile pics first, then render
+  loadAllProfilePics().then(()=>{
+    refreshMeAvatar();
+    renderContacts();
+  });
   connectRT();
   // init notifications (skip if user already dismissed)
   initNotifications();
@@ -776,6 +840,8 @@ function handleNewMessage(m){
   const ck=m.conv_key;
   const isMe=m.sender_id===curUser.id;
   const sender=getU(m.sender_id);
+  // load pic if not yet cached
+  if(sender && !profilePics[sender.id]) loadAllProfilePics().then(()=>renderContacts());
   // update preview
   lastMsgs[ck]={
     preview:(isMe?'You: ':sender?sender.name.split(' ')[0]+': ':'')+( m.content||'📎 File'),
@@ -843,6 +909,8 @@ async function backupPoll(){
     // refresh peer read ts for active DM every 2 backup polls
     // always check peer read ts on every backup poll
     if(activeConv&&!activeConv.startsWith('g_')) refreshPeerRead(activeConv);
+    // reload profile pics occasionally (catches updates from other users)
+    if(Math.random()<0.1) loadAllProfilePics().then(()=>{ renderContacts(); if(activeConv) refreshMeAvatar(); });
   }catch(e){}
   isBkPoll=false;
 }
@@ -1013,17 +1081,21 @@ function renderContacts(filter=''){
 
   USERS.filter(u=>u.id!==curUser.id&&(!fl||u.name.toLowerCase().includes(fl)||u.role.toLowerCase().includes(fl))).forEach(u=>{
     const ck=dmKey(curUser.id,u.id);const last=lastMsgs[ck];
-    scroll.appendChild(mkRow({initials:ini(u.name),color:u.c||u.color,bg:u.bg,dot:true,name:u.name,preview:last?last.preview:u.role,ts:last?.ts,convKey:ck,onclick:()=>openChat(ck)}));
+    scroll.appendChild(mkRow({initials:ini(u.name),color:u.c||u.color,bg:u.bg,dot:true,name:u.name,preview:last?last.preview:u.role,ts:last?.ts,convKey:ck,userId:u.id,onclick:()=>openChat(ck)}));
   });
 }
 
-function mkRow({icon,initials,color,bg,dot,isGrp,name,preview,ts,onclick,convKey}){
+function mkRow({icon,initials,color,bg,dot,isGrp,name,preview,ts,onclick,convKey,userId}){
   const unread=convKey?getUnread(convKey):0;
   const row=document.createElement('div');row.className='crow';row.onclick=onclick;
   const aw=document.createElement('div');aw.className='av-wrap';
   const ai=document.createElement('div');ai.className='av-in'+(isGrp?' grp':'');
-  if(icon){ai.textContent=icon;ai.style.background='#1a2a3a';}
-  else{ai.textContent=initials;ai.style.background=bg;ai.style.color=color;}
+  ai.style.overflow='hidden';
+  if(isGrp){
+    renderAvatar(ai,null,name,bg,color,true,icon);
+  } else {
+    renderAvatar(ai,userId,name,bg,color,false);
+  }
   aw.appendChild(ai);
   if(dot){const d=document.createElement('div');d.className='av-dot';aw.appendChild(d);}
   row.appendChild(aw);
@@ -1050,8 +1122,14 @@ async function openChat(convKey){
   const grp=isG?getGroups().find(g=>g.id===convKey):null;
 
   const av=document.getElementById('chat-av');
-  if(isG){av.className='chat-av-in grp';av.textContent=grp?.icon||'👥';av.style.background='#1a2a3a';av.style.color='';}
-  else if(peer){av.className='chat-av-in';av.textContent=ini(peer.name);av.style.background=peer.bg;av.style.color=peer.c||peer.color;}
+  av.style.overflow='hidden';
+  if(isG){
+    av.className='chat-av-in grp';
+    renderAvatar(av,null,grp?.name||'Group','#1a2a3a','',true,grp?.icon||'👥');
+  } else if(peer){
+    av.className='chat-av-in';
+    renderAvatar(av,peer.id,peer.name,peer.bg,peer.c||peer.color,false);
+  }
 
   document.getElementById('peer-name').textContent=isG?(grp?.name||'Group'):peer?.name||'Unknown';
   document.getElementById('peer-status').textContent=isG?((grp?.members?.length||0)+' members'):'Online';
@@ -1097,7 +1175,12 @@ function renderMsgs(msgs,convKey){
     if(newGrp){
       const grp=document.createElement('div');grp.className='mgrp '+(isSent?'sent':'recv');
       const inner=document.createElement('div');inner.className='mgrp-inner';
-      if(!isSent&&sender){const a=document.createElement('div');a.className='mini-av';a.textContent=ini(sender.name);a.style.background=sender.bg;a.style.color=sender.c||sender.color;inner.appendChild(a);}
+      if(!isSent&&sender){
+        const a=document.createElement('div');a.className='mini-av';
+        a.style.overflow='hidden';a.style.flexShrink='0';
+        renderAvatar(a,sender.id,sender.name,sender.bg,sender.c||sender.color,false);
+        inner.appendChild(a);
+      }
       const bubs=document.createElement('div');bubs.className='bubbles';
       if(!isSent&&isG&&sender&&newGrp){const t=document.createElement('div');t.className='stag';t.textContent=sender.name.split(' ')[0];bubs.appendChild(t);}
       addBub(bubs,msg,isSent);
@@ -1205,6 +1288,144 @@ function handleFiles(i){Array.from(i.files).forEach(f=>{pendingFiles.push({file:
 function handleImgs(i){Array.from(i.files).forEach(f=>{pendingFiles.push({file:f});addFP(f.name,'🖼️');});i.value='';}
 function addFP(name,icon){const r=document.getElementById('fp-row');const el=document.createElement('div');el.className='fp-item';el.innerHTML=`<span>${icon} ${esc(name)}</span><button class="fp-rm" onclick="removeFP(this,'${esc(name)}')">✕</button>`;r.appendChild(el);}
 function removeFP(btn,name){pendingFiles=pendingFiles.filter(f=>f.file.name!==name);btn.parentElement.remove();}
+
+// ── PROFILE PICTURE ──────────────────────────────────────────
+// Stored in app_config: key="pic_<userId>" value=base64 dataURL
+// Loaded for all users on app start and cached in memory
+
+let profilePics={};       // userId -> dataURL
+let newPicDataUrl=null;   // pending upload
+
+async function loadAllProfilePics(){
+  try{
+    const rows=await sb.select('app_config','key=like.pic_%');
+    if(!rows) return;
+    rows.forEach(r=>{
+      const uid=r.key.replace('pic_','');
+      profilePics[uid]=r.value;
+    });
+  }catch(e){}
+}
+
+function getUserPic(userId){
+  return profilePics[userId]||null;
+}
+
+// Render avatar — uses photo if available, else initials
+function renderAvatar(el, userId, name, bg, color, isGroup=false, groupIcon=''){
+  el.innerHTML='';
+  if(isGroup){
+    el.style.background='#1a2a3a';
+    el.style.color='';
+    el.textContent=groupIcon||'👥';
+    el.style.borderRadius='14px';
+    return;
+  }
+  const pic=getUserPic(userId);
+  if(pic){
+    el.style.background='transparent';
+    el.style.color='';
+    const img=document.createElement('img');
+    img.src=pic;
+    img.style.cssText='width:100%;height:100%;object-fit:cover;border-radius:inherit;';
+    img.onerror=()=>{ el.innerHTML=''; el.textContent=ini(name); el.style.background=bg; el.style.color=color; };
+    el.appendChild(img);
+  } else {
+    el.textContent=ini(name);
+    el.style.background=bg;
+    el.style.color=color;
+  }
+}
+
+function openProfileModal(){
+  if(!curUser) return;
+  newPicDataUrl=null;
+  document.getElementById('profile-save-btn').style.display='none';
+  document.getElementById('profile-modal-name').textContent=curUser.name;
+  document.getElementById('profile-modal-role').textContent=curUser.role;
+  // show current avatar
+  const bigAv=document.getElementById('profile-av-big');
+  bigAv.style.background=curUser.bg;
+  bigAv.style.color=curUser.c||curUser.color;
+  bigAv.style.borderRadius='50%';
+  renderAvatar(bigAv, curUser.id, curUser.name, curUser.bg, curUser.c||curUser.color);
+  document.getElementById('profile-modal').classList.add('show');
+}
+
+function closeProfileModal(){
+  document.getElementById('profile-modal').classList.remove('show');
+  newPicDataUrl=null;
+  document.getElementById('pic-input').value='';
+}
+
+document.getElementById('profile-modal').addEventListener('click',e=>{
+  if(e.target===e.currentTarget) closeProfileModal();
+});
+
+function handleProfilePic(input){
+  const file=input.files[0];
+  if(!file) return;
+  if(file.size>5*1024*1024){ toast('⚠ Image too large. Max 5MB.'); return; }
+  const reader=new FileReader();
+  reader.onload=(e)=>{
+    newPicDataUrl=e.target.result;
+    // compress to max 200x200
+    compressImage(newPicDataUrl, 200, (compressed)=>{
+      newPicDataUrl=compressed;
+      const bigAv=document.getElementById('profile-av-big');
+      bigAv.innerHTML='';
+      const img=document.createElement('img');
+      img.src=compressed;
+      img.style.cssText='width:100%;height:100%;object-fit:cover;border-radius:50%;';
+      bigAv.appendChild(img);
+      document.getElementById('profile-save-btn').style.display='block';
+    });
+  };
+  reader.readAsDataURL(file);
+}
+
+function compressImage(dataUrl, maxSize, callback){
+  const img=new Image();
+  img.onload=()=>{
+    const canvas=document.createElement('canvas');
+    let w=img.width, h=img.height;
+    if(w>h){ if(w>maxSize){h=Math.round(h*maxSize/w);w=maxSize;} }
+    else { if(h>maxSize){w=Math.round(w*maxSize/h);h=maxSize;} }
+    canvas.width=w; canvas.height=h;
+    const ctx=canvas.getContext('2d');
+    ctx.drawImage(img,0,0,w,h);
+    callback(canvas.toDataURL('image/jpeg',0.75));
+  };
+  img.src=dataUrl;
+}
+
+async function saveProfilePic(){
+  if(!newPicDataUrl) return;
+  const btn=document.getElementById('profile-save-btn');
+  btn.textContent='Saving...'; btn.disabled=true;
+  try{
+    // save to Supabase app_config
+    await sb.upsert('app_config',[{key:'pic_'+curUser.id, value:newPicDataUrl}],'key');
+    // update local cache
+    profilePics[curUser.id]=newPicDataUrl;
+    // update me-bar avatar
+    refreshMeAvatar();
+    // refresh contacts list
+    renderContacts();
+    closeProfileModal();
+    toast('✓ Profile photo updated!');
+  }catch(e){
+    toast('⚠ Failed to save: '+e.message);
+    btn.textContent='Save Photo'; btn.disabled=false;
+  }
+}
+
+function refreshMeAvatar(){
+  const el=document.getElementById('me-av');
+  el.style.width='36px'; el.style.height='36px';
+  el.style.borderRadius='50%'; el.style.overflow='hidden';
+  renderAvatar(el, curUser.id, curUser.name, curUser.bg, curUser.c||curUser.color);
+}
 
 // ── CHAT MENU ────────────────────────────────────────────────
 function showChatMenu(){
