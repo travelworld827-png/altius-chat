@@ -133,7 +133,7 @@ textarea{-webkit-appearance:none;}
 .icon-btn:active{color:var(--text);background:var(--bg3);}
 
 /* ── CHAT ── */
-#s-chat{background:#e5ddd5;}
+#s-chat{background:#e5ddd5;position:relative;}
 .chat-bar{
   height:var(--bar-h);background:#ffffff;border-bottom:1px solid rgba(0,0,0,0.08);
   display:flex;align-items:center;padding:0 8px 0 2px;gap:6px;flex-shrink:0;
@@ -263,6 +263,23 @@ textarea{-webkit-appearance:none;}
 @keyframes bIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
 .banim{animation:bIn .18s ease;}
 
+/* Clear chat confirm overlay */
+.confirm-ov{
+  position:fixed;inset:0;background:rgba(0,0,0,0.5);
+  display:none;align-items:center;justify-content:center;z-index:400;padding:24px;
+}
+.confirm-ov.show{display:flex;}
+.confirm-card{
+  background:#ffffff;border-radius:16px;padding:28px 24px;
+  width:100%;max-width:300px;display:flex;flex-direction:column;gap:16px;
+  box-shadow:0 8px 32px rgba(0,0,0,0.2);
+}
+.confirm-title{font-size:16px;font-weight:600;color:#111418;}
+.confirm-body{font-size:14px;color:#65676b;line-height:1.5;}
+.confirm-btns{display:flex;gap:10px;}
+.confirm-cancel{flex:1;background:#f0f2f5;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:500;cursor:pointer;font-family:var(--font);color:#111418;}
+.confirm-ok{flex:1;background:#e02c2c;border:none;border-radius:10px;padding:12px;font-size:14px;font-weight:600;cursor:pointer;font-family:var(--font);color:#ffffff;}
+
 /* Read receipts */
 .tick{font-size:11px;margin-left:3px;}
 .tick.sent{color:#8a8d91;}
@@ -301,6 +318,18 @@ textarea{-webkit-appearance:none;}
   </div>
 </div>
 <div id="toast"></div>
+
+<!-- Clear chat confirm -->
+<div class="confirm-ov" id="confirm-ov">
+  <div class="confirm-card">
+    <div class="confirm-title">Clear this chat?</div>
+    <div class="confirm-body">All messages in this conversation will be deleted for you. This cannot be undone.</div>
+    <div class="confirm-btns">
+      <button class="confirm-cancel" onclick="hideConfirm()">Cancel</button>
+      <button class="confirm-ok" id="confirm-ok-btn">Clear chat</button>
+    </div>
+  </div>
+</div>
 
 <!-- LOGIN -->
 <div class="screen active" id="s-login">
@@ -378,8 +407,15 @@ textarea{-webkit-appearance:none;}
     <button class="back-btn" onclick="goContacts()">‹</button>
     <div class="chat-av-in" id="chat-av"></div>
     <div style="flex:1;"><div class="peer-name" id="peer-name"></div><div class="peer-status" id="peer-status"></div></div>
-    <button class="ca-btn" onclick="startCall('voice')">📞</button>
-    <button class="ca-btn" onclick="startCall('video')">📹</button>
+    <button class="ca-btn" onclick="startCall('voice')" title="Voice call">📞</button>
+    <button class="ca-btn" onclick="startCall('video')" title="Video call">📹</button>
+    <button class="ca-btn" onclick="showChatMenu()" id="chat-menu-btn" title="More options">⋮</button>
+  </div>
+  <!-- chat options dropdown -->
+  <div id="chat-menu-drop" style="display:none;position:absolute;top:calc(var(--bar-h) + var(--safe-top));right:8px;background:#ffffff;border:1px solid rgba(0,0,0,0.12);border-radius:12px;box-shadow:0 4px 20px rgba(0,0,0,0.15);z-index:100;overflow:hidden;min-width:160px;">
+    <button onclick="clearChat()" style="display:flex;align-items:center;gap:10px;width:100%;background:none;border:none;padding:14px 18px;font-size:14px;color:#e02c2c;cursor:pointer;font-family:var(--font);text-align:left;">
+      🗑️ Clear chat
+    </button>
   </div>
   <div class="msgs-wrap" id="msgs-wrap"></div>
   <div class="compose">
@@ -805,7 +841,8 @@ async function backupPoll(){
       if(m.created_at>known) handleNewMessage(m);
     });
     // refresh peer read ts for active DM every 2 backup polls
-    if(activeConv&&!activeConv.startsWith('g_')&&Math.random()<0.5) refreshPeerRead(activeConv);
+    // always check peer read ts on every backup poll
+    if(activeConv&&!activeConv.startsWith('g_')) refreshPeerRead(activeConv);
   }catch(e){}
   isBkPoll=false;
 }
@@ -1022,7 +1059,7 @@ async function openChat(convKey){
   showScreen('s-chat');
   document.getElementById('msg-in').focus();
   markConvRead(convKey);
-  loadPeerReadTs(convKey);  // async, updates ticks when done
+  refreshPeerRead(convKey);  // load peer's read timestamp immediately
   await loadAndRender(convKey);
 }
 
@@ -1068,7 +1105,7 @@ function renderMsgs(msgs,convKey){
       const tm=document.createElement('div');tm.className='mtime';
       if(isSent){
         const isRead=isReadByPeer(convKey,ts);
-        tm.innerHTML=ft(ts)+'&nbsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
+        tm.innerHTML=ft(ts)+'&thinsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
       } else {
         tm.textContent=ft(ts);
       }
@@ -1082,7 +1119,7 @@ function renderMsgs(msgs,convKey){
       if(tm){
         if(isSent){
           const isRead=isReadByPeer(convKey,ts);
-          tm.innerHTML=ft(ts)+'&nbsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
+          tm.innerHTML=ft(ts)+'&thinsp;<span class="tick '+(isRead?'read':'sent')+'">'+(isRead?'✓✓':'✓')+'</span>';
         } else {
           tm.textContent=ft(ts);
         }
@@ -1168,6 +1205,70 @@ function handleFiles(i){Array.from(i.files).forEach(f=>{pendingFiles.push({file:
 function handleImgs(i){Array.from(i.files).forEach(f=>{pendingFiles.push({file:f});addFP(f.name,'🖼️');});i.value='';}
 function addFP(name,icon){const r=document.getElementById('fp-row');const el=document.createElement('div');el.className='fp-item';el.innerHTML=`<span>${icon} ${esc(name)}</span><button class="fp-rm" onclick="removeFP(this,'${esc(name)}')">✕</button>`;r.appendChild(el);}
 function removeFP(btn,name){pendingFiles=pendingFiles.filter(f=>f.file.name!==name);btn.parentElement.remove();}
+
+// ── CHAT MENU ────────────────────────────────────────────────
+function showChatMenu(){
+  const drop = document.getElementById('chat-menu-drop');
+  const isShowing = drop.style.display === 'block';
+  drop.style.display = isShowing ? 'none' : 'block';
+  if(!isShowing){
+    setTimeout(()=>document.addEventListener('click', function h(){
+      drop.style.display='none';
+      document.removeEventListener('click',h);
+    },{once:true}),50);
+  }
+}
+
+function clearChat(){
+  document.getElementById('chat-menu-drop').style.display='none';
+  showConfirm('Clear this chat?', 'All messages will be deleted permanently. This cannot be undone.', async()=>{
+    if(!activeConv) return;
+    const btn = document.getElementById('confirm-ok-btn');
+    btn.textContent = 'Clearing...'; btn.disabled = true;
+    try{
+      // delete all messages for this conv_key in Supabase
+      const url = SB_URL + '/rest/v1/messages?conv_key=eq.' + encodeURIComponent(activeConv);
+      const r = await fetch(url,{
+        method:'DELETE',
+        headers:{
+          'apikey': SB_KEY,
+          'Authorization': 'Bearer ' + SB_KEY,
+          'Content-Type': 'application/json'
+        }
+      });
+      if(!r.ok){ const e=await r.json().catch(()=>({})); throw new Error(e.message||r.statusText); }
+      // clear local state
+      delete lastMsgs[activeConv];
+      delete lastMsgTs[activeConv];
+      unreadCounts[activeConv] = 0;
+      renderContacts();
+      // reload empty chat
+      const wrap = document.getElementById('msgs-wrap');
+      wrap.innerHTML='<div style="text-align:center;color:#8a8d91;padding:60px 20px;font-size:13px;">Chat cleared. Say hello! 👋</div>';
+      hideConfirm();
+      toast('✓ Chat cleared');
+    }catch(e){
+      btn.textContent = 'Clear chat'; btn.disabled = false;
+      toast('⚠ Failed: ' + e.message);
+    }
+  });
+}
+
+function showConfirm(title, body, onOk){
+  document.querySelector('.confirm-title').textContent = title;
+  document.querySelector('.confirm-body').textContent = body;
+  const btn = document.getElementById('confirm-ok-btn');
+  btn.textContent = 'Clear chat'; btn.disabled = false;
+  btn.onclick = onOk;
+  document.getElementById('confirm-ov').classList.add('show');
+}
+function hideConfirm(){
+  document.getElementById('confirm-ov').classList.remove('show');
+}
+// close confirm on backdrop click
+document.getElementById('confirm-ov').addEventListener('click', e=>{
+  if(e.target===e.currentTarget) hideConfirm();
+});
 
 // ── CALL ──────────────────────────────────────────────────────
 function startCall(type){
