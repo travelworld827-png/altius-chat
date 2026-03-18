@@ -8,16 +8,18 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#0d0f14;--bg2:#141720;--bg3:#1c2030;--bg4:#242840;
-  --border:rgba(255,255,255,0.07);--border2:rgba(255,255,255,0.13);
+  --bg:#f0f2f5;--bg2:#ffffff;--bg3:#f0f2f5;--bg4:#e4e6eb;
+  --border:rgba(0,0,0,0.08);--border2:rgba(0,0,0,0.12);
   --accent:#e8a045;--accent-dim:rgba(232,160,69,0.12);
-  --text:#e8eaf0;--text2:#8c8fa8;--text3:#555870;
-  --green:#3dba74;--red:#e05555;
-  --bout:#e8a045;--bout-t:#1a1000;--bin:#1c2030;
+  --text:#111418;--text2:#65676b;--text3:#8a8d91;
+  --green:#31a24c;--red:#e02c2c;
+  --bout:#e8a045;--bout-t:#1a1000;--bin:#ffffff;
   --font:'DM Sans',sans-serif;--mono:'DM Mono',monospace;
   --safe-bottom:env(safe-area-inset-bottom,0px);
   --safe-top:env(safe-area-inset-top,0px);
   --bar-h:60px;
+  --sidebar:#1a1e2e;--sidebar-text:#e8eaf0;--sidebar-text2:#8c8fa8;
+  --sidebar-border:rgba(255,255,255,0.07);--sidebar-hover:rgba(255,255,255,0.06);
 }
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
 html{height:100%;height:-webkit-fill-available;}
@@ -36,17 +38,17 @@ textarea{-webkit-appearance:none;}
 .screen.active{display:flex;}
 
 /* ── LOGIN ── */
-#s-login{align-items:center;justify-content:center;background:var(--bg);padding:16px;}
+#s-login{align-items:center;justify-content:center;background:#0d0f14;padding:16px;}
 .lcard{
-  background:var(--bg2);border:1px solid var(--border2);border-radius:22px;
+  background:#141720;border:1px solid rgba(255,255,255,0.13);border-radius:22px;
   padding:32px 28px;width:100%;max-width:360px;
   display:flex;flex-direction:column;gap:20px;
 }
-.llogo{display:flex;align-items:center;gap:12px;}
+.llogo{display:flex;align-items:center;gap:12px;color:#e8eaf0;}
 .lm{width:42px;height:42px;border-radius:12px;background:var(--accent);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:16px;font-weight:600;color:#1a1000;flex-shrink:0;}
 .lsub{font-size:13px;color:var(--text2);line-height:1.5;}
 .lform{display:flex;flex-direction:column;gap:12px;}
-.lfl{font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.8px;font-weight:500;margin-bottom:5px;}
+.lfl{font-size:11px;color:#555870;text-transform:uppercase;letter-spacing:0.8px;font-weight:500;margin-bottom:5px;}
 .li{
   background:var(--bg3);border:1px solid var(--border2);border-radius:12px;
   padding:14px 16px;font-size:16px;color:var(--text);font-family:var(--font);
@@ -62,7 +64,7 @@ textarea{-webkit-appearance:none;}
 }
 .lb:active{background:#f0b060;}
 .lb:disabled{opacity:.5;}
-.lerr{font-size:13px;color:var(--red);background:rgba(224,85,85,0.1);border-radius:10px;padding:10px 13px;display:none;line-height:1.4;}
+.lerr{font-size:13px;color:#ff6b6b;background:rgba(224,85,85,0.15);border-radius:10px;padding:10px 13px;display:none;line-height:1.4;}
 
 /* ── SETUP ── */
 #s-setup{background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch;}
@@ -71,26 +73,27 @@ textarea{-webkit-appearance:none;}
 
 /* ── APP BAR ── */
 .app-bar{
-  height:var(--bar-h);background:var(--bg2);border-bottom:1px solid var(--border);
+  height:var(--bar-h);background:#ffffff;border-bottom:1px solid rgba(0,0,0,0.1);
   display:flex;align-items:center;padding:0 12px;gap:10px;flex-shrink:0;
   padding-top:var(--safe-top);height:calc(var(--bar-h) + var(--safe-top));
 }
-.app-bar-title{font-size:17px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.app-bar-title{font-size:17px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#111418;}
 .ab-btn{
-  background:none;border:none;color:var(--text2);cursor:pointer;
+  background:none;border:none;color:#65676b;cursor:pointer;
   font-size:22px;padding:8px;border-radius:10px;
   display:flex;align-items:center;justify-content:center;
   min-width:40px;min-height:40px;
   transition:background .15s;
 }
-.ab-btn:active{background:var(--bg3);}
+.ab-btn:active{background:#f0f2f5;}
 
 /* ── CONTACTS ── */
-#s-contacts{background:var(--bg);}
+#s-contacts{background:#f0f2f5;}
+.sidebar-dark{background:#1a1e2e !important;}
 #conn-badge{
   font-size:12px;padding:8px 16px;
-  background:rgba(232,160,69,0.12);color:var(--accent);
-  border-bottom:1px solid rgba(232,160,69,0.2);
+  background:#fff3cd;color:#856404;
+  border-bottom:1px solid #ffc107;
   text-align:center;display:none;flex-shrink:0;
 }
 #conn-badge.error{background:rgba(224,85,85,0.1);color:var(--red);border-color:rgba(224,85,85,0.2);}
@@ -101,13 +104,13 @@ textarea{-webkit-appearance:none;}
   font-family:var(--font);outline:none;
 }
 .search-in::placeholder{color:var(--text3);}
-.section-hdr{padding:8px 16px 4px;font-size:10px;text-transform:uppercase;letter-spacing:0.9px;color:var(--text3);font-weight:500;}
+.section-hdr{padding:8px 16px 4px;font-size:10px;text-transform:uppercase;letter-spacing:0.9px;color:#65676b;font-weight:500;background:#f0f2f5;}
 .cscroll{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .cscroll::-webkit-scrollbar{display:none;}
 
 /* contact row */
-.crow{display:flex;align-items:center;gap:13px;padding:12px 16px;cursor:pointer;border-bottom:1px solid var(--border);user-select:none;}
-.crow:active{background:var(--bg3);}
+.crow{display:flex;align-items:center;gap:13px;padding:12px 16px;cursor:pointer;border-bottom:1px solid rgba(0,0,0,0.06);user-select:none;background:#ffffff;}
+.crow:active{background:#f0f2f5;}
 .av-wrap{position:relative;flex-shrink:0;}
 .av-in{width:50px;height:50px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:17px;font-weight:600;font-family:var(--mono);}
 .av-in.grp{border-radius:15px;font-size:21px;}
@@ -120,39 +123,39 @@ textarea{-webkit-appearance:none;}
 
 /* me bar */
 .me-bar{
-  border-top:1px solid var(--border);
+  border-top:1px solid rgba(0,0,0,0.08);
   padding:12px 16px;
   padding-bottom:calc(12px + var(--safe-bottom));
-  display:flex;align-items:center;gap:12px;background:var(--bg2);flex-shrink:0;
+  display:flex;align-items:center;gap:12px;background:#ffffff;flex-shrink:0;
 }
 .me-av{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;font-family:var(--mono);flex-shrink:0;}
 .icon-btn{background:none;border:none;color:var(--text3);cursor:pointer;padding:8px;border-radius:10px;font-size:18px;min-width:40px;min-height:40px;display:flex;align-items:center;justify-content:center;}
 .icon-btn:active{color:var(--text);background:var(--bg3);}
 
 /* ── CHAT ── */
-#s-chat{background:var(--bg);}
+#s-chat{background:#e5ddd5;}
 .chat-bar{
-  height:var(--bar-h);background:var(--bg2);border-bottom:1px solid var(--border);
+  height:var(--bar-h);background:#ffffff;border-bottom:1px solid rgba(0,0,0,0.08);
   display:flex;align-items:center;padding:0 8px 0 2px;gap:6px;flex-shrink:0;
   padding-top:var(--safe-top);height:calc(var(--bar-h) + var(--safe-top));
 }
 .back-btn{
-  background:none;border:none;color:var(--text);cursor:pointer;
+  background:none;border:none;color:#111418;cursor:pointer;
   font-size:28px;padding:6px 8px;display:flex;align-items:center;
   min-width:44px;min-height:44px;justify-content:center;
 }
 .chat-av-in{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;font-family:var(--mono);flex-shrink:0;}
 .chat-av-in.grp{border-radius:11px;font-size:18px;}
-.peer-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.peer-name{font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#111418;}
 .peer-status{font-size:12px;color:var(--green);margin-top:1px;}
 .ca-btn{background:none;border:none;color:var(--text2);cursor:pointer;font-size:22px;padding:8px;border-radius:10px;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center;}
 .ca-btn:active{background:var(--bg3);}
 
 /* messages */
-.msgs-wrap{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 12px 6px;display:flex;flex-direction:column;gap:2px;}
+.msgs-wrap{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:12px 12px 6px;display:flex;flex-direction:column;gap:2px;background:#e5ddd5;}
 .msgs-wrap::-webkit-scrollbar{display:none;}
 .date-chip{text-align:center;margin:10px 0 6px;}
-.date-chip span{font-size:11px;color:var(--text3);background:var(--bg3);border:1px solid var(--border);border-radius:20px;padding:3px 12px;font-family:var(--mono);}
+.date-chip span{font-size:11px;color:#65676b;background:rgba(255,255,255,0.85);border:none;border-radius:20px;padding:3px 12px;font-family:var(--mono);box-shadow:0 1px 2px rgba(0,0,0,0.12);}
 .mgrp{display:flex;flex-direction:column;margin-bottom:4px;}
 .mgrp.sent{align-items:flex-end;}
 .mgrp.recv{align-items:flex-start;}
@@ -163,23 +166,23 @@ textarea{-webkit-appearance:none;}
 .bubbles{display:flex;flex-direction:column;gap:2px;max-width:min(75vw,300px);}
 .mgrp.sent .bubbles{align-items:flex-end;}
 .mgrp.recv .bubbles{align-items:flex-start;}
-.stag{font-size:11px;color:var(--accent);font-weight:600;font-family:var(--mono);margin-bottom:3px;padding-left:2px;}
+.stag{font-size:11px;color:#e8a045;font-weight:600;font-family:var(--mono);margin-bottom:3px;padding-left:2px;}
 .bub{padding:10px 14px;border-radius:18px;font-size:15px;line-height:1.5;word-break:break-word;}
 .bub.sent{background:var(--bout);color:var(--bout-t);border-bottom-right-radius:5px;}
 .bub.recv{background:var(--bin);color:var(--text);border:1px solid var(--border);border-bottom-left-radius:5px;}
-.mtime{font-size:11px;color:var(--text3);font-family:var(--mono);margin-top:3px;padding:0 2px;}
+.mtime{font-size:11px;color:#8a8d91;font-family:var(--mono);margin-top:3px;padding:0 2px;}
 .mgrp.sent .mtime{text-align:right;}
 .img-bub{border-radius:14px;overflow:hidden;max-width:min(65vw,220px);border:1px solid var(--border);}
 .img-bub img{width:100%;display:block;max-height:260px;object-fit:cover;}
-.file-bub{display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border2);border-radius:14px;padding:11px 13px;text-decoration:none;color:var(--text);max-width:min(70vw,240px);}
-.file-bub:active{background:var(--bg4);}
+.file-bub{display:flex;align-items:center;gap:10px;background:#f0f2f5;border:1px solid rgba(0,0,0,0.08);border-radius:14px;padding:11px 13px;text-decoration:none;color:#111418;max-width:min(70vw,240px);}
+.file-bub:active{background:#e4e6eb;}
 .fic{width:36px;height:36px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px;background:var(--accent-dim);flex-shrink:0;}
 
 /* ── COMPOSE ── */
 .compose{
   padding:8px 10px;
   padding-bottom:calc(10px + var(--safe-bottom));
-  background:var(--bg2);border-top:1px solid var(--border);flex-shrink:0;
+  background:#f0f2f5;border-top:1px solid rgba(0,0,0,0.08);flex-shrink:0;
 }
 .fp-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;}
 .fp-item{background:var(--bg3);border:1px solid var(--border2);border-radius:8px;padding:5px 10px;font-size:12px;display:flex;align-items:center;gap:6px;max-width:200px;}
@@ -212,14 +215,14 @@ textarea{-webkit-appearance:none;}
 .send-btn:disabled{opacity:.35;}
 
 /* ── ADMIN ── */
-#s-admin{background:var(--bg);overflow-y:auto;-webkit-overflow-scrolling:touch;}
+#s-admin{background:#f0f2f5;overflow-y:auto;-webkit-overflow-scrolling:touch;}
 .admin-wrap{padding:16px;padding-bottom:calc(16px + var(--safe-bottom));display:flex;flex-direction:column;gap:14px;max-width:500px;margin:0 auto;width:100%;}
 .section-title{font-size:11px;text-transform:uppercase;letter-spacing:0.9px;color:var(--text3);font-weight:500;}
 .af-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 @media(max-width:360px){.af-grid{grid-template-columns:1fr;}}
 .af-in{
-  width:100%;background:var(--bg3);border:1px solid var(--border2);
-  border-radius:10px;padding:12px;font-size:16px;color:var(--text);
+  width:100%;background:#ffffff;border:1px solid rgba(0,0,0,0.12);
+  border-radius:10px;padding:12px;font-size:16px;color:#111418;
   font-family:var(--font);outline:none;
 }
 .af-in:focus{border-color:var(--accent);}
@@ -231,7 +234,7 @@ textarea{-webkit-appearance:none;}
 .cpick-row{display:flex;gap:8px;flex-wrap:wrap;}
 .cpick{width:28px;height:28px;border-radius:50%;cursor:pointer;border:2px solid transparent;transition:transform .15s,border .15s;}
 .cpick.sel{border-color:var(--accent);transform:scale(1.2);}
-.ucard{background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:13px 14px;display:flex;align-items:center;gap:12px;}
+.ucard{background:#ffffff;border:1px solid rgba(0,0,0,0.08);border-radius:14px;padding:13px 14px;display:flex;align-items:center;gap:12px;}
 .uc-av{width:42px;height:42px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:600;font-family:var(--mono);flex-shrink:0;}
 .uc-info{flex:1;overflow:hidden;}
 .uc-name{font-size:14px;font-weight:600;}
@@ -262,14 +265,14 @@ textarea{-webkit-appearance:none;}
 
 /* Read receipts */
 .tick{font-size:11px;margin-left:3px;}
-.tick.sent{color:rgba(26,16,0,0.5);}
-.tick.read{color:#1a1000;}
+.tick.sent{color:#8a8d91;}
+.tick.read{color:#4fc3f7;}
 .tick.recv{color:var(--text3);}
 
 /* Unread badge on contact row */
 .unread-dot{
   width:20px;height:20px;border-radius:50%;
-  background:var(--accent);color:#1a1000;
+  background:#25d366;color:#ffffff;
   font-size:11px;font-weight:700;font-family:var(--mono);
   display:flex;align-items:center;justify-content:center;
   flex-shrink:0;margin-left:4px;
@@ -461,11 +464,51 @@ const sb = {
     return true;
   },
 
-  // Dummy channel (we use polling instead — more reliable cross-browser)
-  channel(name) {
-    return { on(){ return this; }, subscribe(){ return this; }, _interval:null };
+  // Supabase Realtime via WebSocket
+  channel(name){
+    const subs=[], self={on(ev,filter,cb){subs.push({filter,cb});return self;},_ws:null,_hb:null};
+    self.subscribe=(statusCb)=>{
+      const wsUrl=SB_URL.replace('https://','wss://').replace('http://','ws://')+
+        '/realtime/v1/websocket?apikey='+SB_KEY+'&vsn=1.0.0';
+      const connect=()=>{
+        try{
+          const ws=new WebSocket(wsUrl);
+          self._ws=ws;
+          ws.onopen=()=>{
+            ws.send(JSON.stringify({topic:'realtime:'+name,event:'phx_join',
+              payload:{config:{broadcast:{self:false},presence:{key:''},
+              postgres_changes:subs.map(s=>s.filter)}},ref:'1'}));
+            // heartbeat every 25s
+            self._hb=setInterval(()=>{
+              if(ws.readyState===1) ws.send(JSON.stringify({topic:'phoenix',event:'heartbeat',payload:{},ref:'hb'}));
+            },25000);
+            if(statusCb)statusCb('SUBSCRIBED');
+          };
+          ws.onmessage=(e)=>{
+            try{
+              const msg=JSON.parse(e.data);
+              if(msg.event==='postgres_changes'){
+                const rec=msg.payload?.data?.record||msg.payload?.record;
+                if(rec) subs.forEach(s=>{ if(!s.filter.table||s.filter.table===msg.payload?.data?.table||s.filter.table===msg.payload?.table) s.cb({new:rec}); });
+              }
+            }catch(err){}
+          };
+          ws.onclose=()=>{
+            clearInterval(self._hb);
+            // reconnect after 3s
+            setTimeout(connect,3000);
+          };
+          ws.onerror=()=>{ ws.close(); };
+        }catch(e){ setTimeout(connect,5000); }
+      };
+      connect();
+      return self;
+    };
+    return self;
   },
-  removeChannel(ch) { try{ if(ch?._interval) clearInterval(ch._interval); }catch(e){} },
+  removeChannel(ch){
+    try{clearInterval(ch?._hb);ch?._ws?.close();}catch(e){}
+  },
 
   // Storage upload
   storage: {
@@ -620,7 +663,7 @@ async function doLogin(){
 }
 
 function doLogout(){
-  if(rtCh){sb.removeChannel(rtCh);rtCh=null;}
+  if(wsChannel){sb.removeChannel(wsChannel);wsChannel=null;} if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
   if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
   localStorage.removeItem('ac_session');
   curUser=null;activeConv=null;convMap={};lastMsgs={};lastMsgTs={};peerReadTs={};unreadCounts={};
@@ -652,11 +695,10 @@ function launchApp(){
 }
 
 // ── REALTIME ENGINE ──────────────────────────────────────────
-// Uses 1-second polling for active chat, 3-second for background.
-// Notifications fire even when app tab is not visible.
+// Primary: Supabase WebSocket — instant delivery
+// Backup: 5s poll — catches anything WebSocket misses
 
-let pollTimer=null, lastMsgTs={};
-let isPolling=false;
+let pollTimer=null, lastMsgTs={}, wsChannel=null;
 
 function convKeys(){
   const keys=[];
@@ -670,11 +712,54 @@ async function connectRT(){
   try{
     await seedLastMsgs();
     setBadge('');
+    startWebSocket();
+    // backup poll every 5s — catches anything WS misses
     if(pollTimer) clearInterval(pollTimer);
-    pollTimer=setInterval(poll, 1500);  // poll every 1.5 seconds
+    pollTimer=setInterval(backupPoll,5000);
   }catch(e){
     setBadge('⚠ Retrying...',true);
     setTimeout(connectRT,4000);
+  }
+}
+
+function startWebSocket(){
+  if(wsChannel) sb.removeChannel(wsChannel);
+  wsChannel=sb.channel('messages-rt')
+    .on('postgres_changes',{event:'INSERT',schema:'public',table:'messages'},(payload)=>{
+      const m=payload.new;
+      if(!m||!m.conv_key) return;
+      handleNewMessage(m);
+    })
+    .subscribe((status)=>{
+      if(status==='SUBSCRIBED') setBadge('');
+      else if(status==='ERROR') setBadge('⚠ Reconnecting...',true);
+    });
+}
+
+function handleNewMessage(m){
+  const ck=m.conv_key;
+  const isMe=m.sender_id===curUser.id;
+  const sender=getU(m.sender_id);
+  // update preview
+  lastMsgs[ck]={
+    preview:(isMe?'You: ':sender?sender.name.split(' ')[0]+': ':'')+( m.content||'📎 File'),
+    ts:m.created_at
+  };
+  lastMsgTs[ck]=m.created_at;
+  renderContacts();
+  if(!isMe){
+    if(activeConv===ck){
+      silentReload(ck);
+      markConvRead(ck);
+    } else {
+      incrementUnread(ck);
+      const isG=ck.startsWith('g_');
+      const grp=isG?getGroups().find(g=>g.id===ck):null;
+      const title=isG&&grp?(sender?.name?.split(' ')[0]||'Someone')+' in '+grp.name:(sender?.name||'New message');
+      fireNotification(title,m.content||'📎 File',ck);
+    }
+  } else if(activeConv===ck){
+    silentReload(ck);
   }
 }
 
@@ -687,7 +772,7 @@ async function seedLastMsgs(){
     const sender=getU(m.sender_id);
     const isMe=m.sender_id===curUser.id;
     lastMsgs[ck]={preview:(isMe?'You: ':sender?sender.name.split(' ')[0]+': ':'')+( m.content||'📎 File'),ts:m.created_at};
-    lastMsgTs[ck]=m.created_at;  // mark as already known — no notifications on seed
+    lastMsgTs[ck]=m.created_at;
   });
   renderContacts();
   updateDocTitle();
@@ -700,69 +785,29 @@ async function fetchLatestPerConv(keys){
   try{
     const rows=await sb.select('messages',q);
     if(!rows) return [];
-    // dedupe — keep only latest per conv
-    const seen=new Set(), out=[];
+    const seen=new Set(),out=[];
     rows.forEach(m=>{ if(!seen.has(m.conv_key)){seen.add(m.conv_key);out.push(m);} });
     return out;
   }catch(e){ return []; }
 }
 
-async function poll(){
-  if(isPolling) return;
-  isPolling=true;
+let isBkPoll=false;
+async function backupPoll(){
+  if(isBkPoll) return;
+  isBkPoll=true;
   try{
     const keys=convKeys();
-    if(!keys.length){ isPolling=false; return; }
-
+    if(!keys.length){isBkPoll=false;return;}
     const rows=await fetchLatestPerConv(keys);
-    let contactsChanged=false;
-
-    for(const m of rows){
-      const ck=m.conv_key;
-      const known=lastMsgTs[ck];
-      const isNew=known && m.created_at > known;
-      const isMe=m.sender_id===curUser.id;
-      const sender=getU(m.sender_id);
-
-      // always update preview
-      lastMsgs[ck]={
-        preview:(isMe?'You: ':sender?sender.name.split(' ')[0]+': ':'')+( m.content||'📎 File'),
-        ts:m.created_at
-      };
-      contactsChanged=true;
-
-      if(isNew){
-        lastMsgTs[ck]=m.created_at;
-        if(!isMe){
-          if(activeConv===ck){
-            // user is IN this chat — silently reload
-            silentReload(ck);
-            markConvRead(ck);
-          } else {
-            // user is NOT in this chat — increment badge + notify
-            incrementUnread(ck);
-            const isG=ck.startsWith('g_');
-            const grp=isG?getGroups().find(g=>g.id===ck):null;
-            const title=isG&&grp?(sender?.name?.split(' ')[0]||'Someone')+' in '+grp.name:(sender?.name||'New message');
-            fireNotification(title, m.content||'📎 Sent a file', ck);
-          }
-        } else if(activeConv===ck){
-          silentReload(ck);
-        }
-      } else if(!known){
-        lastMsgTs[ck]=m.created_at;
-      }
-    }
-
-    if(contactsChanged) renderContacts();
-
-    // poll read receipts for active DM conv (every ~5 polls = every 7.5s)
-    if(activeConv && !activeConv.startsWith('g_') && Math.random()<0.2){
-      await refreshPeerRead(activeConv);
-    }
-
+    rows.forEach(m=>{
+      const known=lastMsgTs[m.conv_key];
+      if(!known){ lastMsgTs[m.conv_key]=m.created_at; return; }
+      if(m.created_at>known) handleNewMessage(m);
+    });
+    // refresh peer read ts for active DM every 2 backup polls
+    if(activeConv&&!activeConv.startsWith('g_')&&Math.random()<0.5) refreshPeerRead(activeConv);
   }catch(e){}
-  isPolling=false;
+  isBkPoll=false;
 }
 
 // Silent refresh — keeps scroll position, no loading flash
