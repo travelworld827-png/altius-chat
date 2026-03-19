@@ -4,7 +4,31 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <title>Altius Chat</title>
+<script>
+// Register service worker for background notifications
+// Only works when hosted on your own domain (GitHub Pages) — not in preview
+if('serviceWorker' in navigator && location.hostname !== 'www.claudeusercontent.com'){
+  navigator.serviceWorker.register('./sw.js').then(reg=>{
+    console.log('SW registered:', reg.scope);
+  }).catch(()=>{}); // silent fail — sw.js not found in dev/preview
+  navigator.serviceWorker.addEventListener('message', e=>{
+    if(e.data?.type==='OPEN_CONV' && e.data.convKey){
+      if(typeof openChat === 'function') openChat(e.data.convKey);
+      else window.__pendingConv = e.data.convKey;
+    }
+  });
+}
+// Handle #conv= hash from SW notification click
+(function(){
+  const hash = location.hash;
+  if(hash.startsWith('#conv=')){
+    window.__pendingConv = hash.replace('#conv=','');
+    history.replaceState(null,'',location.pathname);
+  }
+})();
+</script>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -799,10 +823,17 @@ function launchApp(){
   document.addEventListener('visibilitychange',()=>{
     if(document.visibilityState==='visible'){
       if(activeConv) markConvRead(activeConv);
-      // reload pics when app comes back to foreground
       loadAllProfilePics().then(()=>{ refreshMeAvatar(); renderContacts(); });
+      updateSWPoll();
     }
   });
+
+  // Open conversation if launched from a notification click
+  if(window.__pendingConv){
+    const ck=window.__pendingConv;
+    delete window.__pendingConv;
+    setTimeout(()=>openChat(ck), 500);
+  }
 }
 
 // ── REALTIME ENGINE ──────────────────────────────────────────
@@ -827,6 +858,8 @@ async function connectRT(){
     // backup poll every 5s — catches anything WS misses
     if(pollTimer) clearInterval(pollTimer);
     pollTimer=setInterval(backupPoll,5000);
+    // Tell SW to poll in background when app is closed
+    setTimeout(updateSWPoll, 2000);
   }catch(e){
     setBadge('⚠ Retrying...',true);
     setTimeout(connectRT,4000);
@@ -874,6 +907,8 @@ function handleNewMessage(m){
   } else if(activeConv===ck){
     silentReload(ck);
   }
+  // Keep SW's timestamp up to date
+  updateSWPoll();
 }
 
 async function seedLastMsgs(){
@@ -1004,13 +1039,26 @@ function incrementUnread(convKey){
 }
 
 // ── NOTIFICATIONS ─────────────────────────────────────────────
+// ── NOTIFICATIONS ─────────────────────────────────────────────
+const NOTIF_ICON = 'data:image/svg+xml,'+encodeURIComponent(
+  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'+
+  '<rect width="64" height="64" rx="16" fill="#e8a045"/>'+
+  '<text x="32" y="44" font-size="30" text-anchor="middle" '+
+  'font-family="monospace" font-weight="bold" fill="#1a1000">AI</text></svg>'
+);
+
 function initNotifications(){
   if(!('Notification' in window)) return;
+  if(Notification.permission==='granted'){
+    // Already granted — start SW background polling
+    startSWBackgroundPoll();
+    return;
+  }
   if(Notification.permission==='default'&&!localStorage.getItem('ac_notif_dismissed')){
     setTimeout(()=>{
       if(Notification.permission==='default')
         document.getElementById('notif-banner').style.display='flex';
-    },3000);
+    },2000);
   }
 }
 
@@ -1018,8 +1066,12 @@ function requestNotifPermission(){
   dismissNotifBanner();
   if(!('Notification' in window)){toast('Notifications not supported in this browser');return;}
   Notification.requestPermission().then(p=>{
-    if(p==='granted') toast('✓ Notifications enabled!');
-    else toast('Blocked. Enable in browser/phone settings.');
+    if(p==='granted'){
+      toast('✓ Notifications enabled!');
+      startSWBackgroundPoll();
+    } else {
+      toast('Blocked — enable in your phone Settings → Browser → Notifications');
+    }
   });
 }
 
@@ -1028,34 +1080,69 @@ function dismissNotifBanner(){
   localStorage.setItem('ac_notif_dismissed','1');
 }
 
+// Tell the Service Worker to poll Supabase in the background
+// This fires even when the app tab is closed/hidden
+function startSWBackgroundPoll(){
+  if(!navigator.serviceWorker?.controller||location.hostname==='www.claudeusercontent.com') return;
+  const keys = convKeys();
+  const lastTs = Object.values(lastMsgTs).sort().pop() || new Date(Date.now()-60000).toISOString();
+  navigator.serviceWorker.controller.postMessage({
+    type: 'INIT_BG_POLL',
+    sbUrl: SB_URL,
+    sbKey: SB_KEY,
+    userId: curUser?.id,
+    convKeys: keys,
+    lastTs: lastTs,
+  });
+}
+
+// Call this whenever new messages arrive — keeps SW's lastTs up to date
+function updateSWPoll(){
+  if(!curUser||!navigator.serviceWorker?.controller||location.hostname==='www.claudeusercontent.com') return;
+  const keys = convKeys();
+  const lastTs = Object.values(lastMsgTs).sort().pop() || new Date(Date.now()-60000).toISOString();
+  navigator.serviceWorker.controller.postMessage({
+    type: 'INIT_BG_POLL',
+    sbUrl: SB_URL,
+    sbKey: SB_KEY,
+    userId: curUser.id,
+    convKeys: keys,
+    lastTs: lastTs,
+  });
+}
+
 function fireNotification(title, body, convKey){
-  // ALWAYS show notification regardless of visibility
-  // (user may be in a different tab or the phone screen is on but on contacts)
-  if(document.visibilityState==='visible'&&activeConv===convKey) return;
+  // Skip if this exact chat is open and visible
+  if(document.visibilityState==='visible' && activeConv===convKey) return;
 
   if(Notification.permission==='granted'){
     try{
-      const icon='data:image/svg+xml,'+encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'+
-        '<rect width="64" height="64" rx="16" fill="#e8a045"/>'+
-        '<text x="32" y="44" font-size="30" text-anchor="middle" '+
-        'font-family="monospace" font-weight="bold" fill="#1a1000">AI</text></svg>'
-      );
-      const n=new Notification(title,{
-        body:body,
-        icon:icon,
-        tag:convKey,        // replaces previous notif for same conv
-        renotify:true,      // vibrate even if same tag
-        requireInteraction:false,
+      const n = new Notification(title, {
+        body: body,
+        icon: NOTIF_ICON,
+        tag: convKey,
+        renotify: true,
+        silent: false,
+        requireInteraction: false,
       });
-      n.onclick=()=>{ window.focus(); openChat(convKey); n.close(); };
-    }catch(e){}
+      n.onclick=()=>{
+        window.focus();
+        openChat(convKey);
+        n.close();
+      };
+    }catch(e){
+      // Fallback: use SW registration to show notification (works on iOS PWA)
+      navigator.serviceWorker?.ready.then(reg=>{
+        reg.showNotification(title,{body,icon:NOTIF_ICON,tag:convKey,renotify:true,
+          data:{convKey},vibrate:[200,100,200]});
+      }).catch(()=>{});
+    }
   } else {
-    // Flash title as fallback
+    // Flash tab title as last resort
     let i=0; const orig=document.title;
     const iv=setInterval(()=>{
       document.title=i++%2===0?'💬 '+title:orig;
-      if(i>8){clearInterval(iv);document.title=updateDocTitle();}
+      if(i>8){clearInterval(iv);updateDocTitle();}
     },500);
   }
 }
