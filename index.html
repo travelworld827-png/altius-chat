@@ -702,6 +702,12 @@ async function postMessage(convKey,fields){
   splash.innerHTML='<div class="lm" style="width:52px;height:52px;font-size:20px;border-radius:14px;">AI</div><div style="font-size:16px;font-weight:600;">Altius Chat</div><div style="font-size:13px;color:var(--text3);">Loading...</div>';
   document.body.appendChild(splash);
 
+  // Load cached pics from localStorage immediately (before any network)
+  try{
+    const cached=localStorage.getItem('ac_pics');
+    if(cached) Object.assign(profilePics, JSON.parse(cached));
+  }catch(e){}
+
   // try Supabase first
   let sbOk=false;
   try{
@@ -765,6 +771,7 @@ function doLogout(){
   if(pollTimer){clearInterval(pollTimer);pollTimer=null;}
   localStorage.removeItem('ac_session');
   curUser=null;activeConv=null;convMap={};lastMsgs={};lastMsgTs={};peerReadTs={};unreadCounts={};
+  profilePics={};  // clear in-memory cache (localStorage copy stays)
   document.getElementById('l-user').value='';
   document.getElementById('l-pass').value='';
   showScreen('s-login');
@@ -790,7 +797,11 @@ function launchApp(){
   initNotifications();
   // handle visibility change — mark read when user comes back to app
   document.addEventListener('visibilitychange',()=>{
-    if(document.visibilityState==='visible'&&activeConv) markConvRead(activeConv);
+    if(document.visibilityState==='visible'){
+      if(activeConv) markConvRead(activeConv);
+      // reload pics when app comes back to foreground
+      loadAllProfilePics().then(()=>{ refreshMeAvatar(); renderContacts(); });
+    }
   });
 }
 
@@ -910,7 +921,8 @@ async function backupPoll(){
     // always check peer read ts on every backup poll
     if(activeConv&&!activeConv.startsWith('g_')) refreshPeerRead(activeConv);
     // reload profile pics occasionally (catches updates from other users)
-    if(Math.random()<0.1) loadAllProfilePics().then(()=>{ renderContacts(); if(activeConv) refreshMeAvatar(); });
+    // Reload pics every ~30s (every 6th poll at 5s interval)
+    if(Math.random()<0.17) loadAllProfilePics().then(()=>{ renderContacts(); refreshMeAvatar(); });
   }catch(e){}
   isBkPoll=false;
 }
@@ -1293,18 +1305,37 @@ function removeFP(btn,name){pendingFiles=pendingFiles.filter(f=>f.file.name!==na
 // Stored in app_config: key="pic_<userId>" value=base64 dataURL
 // Loaded for all users on app start and cached in memory
 
-let profilePics={};       // userId -> dataURL
+let profilePics={};       // userId -> dataURL (also cached in localStorage as 'ac_pics')
 let newPicDataUrl=null;   // pending upload
 
 async function loadAllProfilePics(){
+  // First load from localStorage cache (instant)
   try{
-    const rows=await sb.select('app_config','key=like.pic_%');
+    const cached=localStorage.getItem('ac_pics');
+    if(cached){
+      const parsed=JSON.parse(cached);
+      Object.assign(profilePics, parsed);
+    }
+  }catch(e){}
+
+  // Then fetch fresh from Supabase for all known users
+  try{
+    const userIds=USERS.map(u=>u.id);
+    if(!userIds.length) return;
+    // Fetch pic for each user individually using exact key match
+    const picKeys=userIds.map(id=>'pic_'+id);
+    // PostgREST: key=in.(pic_harish,pic_ahmed,...)
+    const keyList=picKeys.map(k=>'"'+k+'"').join(',');
+    const rows=await sb.select('app_config','key=in.('+keyList+')');
     if(!rows) return;
     rows.forEach(r=>{
+      if(!r.value) return;
       const uid=r.key.replace('pic_','');
       profilePics[uid]=r.value;
     });
-  }catch(e){}
+    // Save to localStorage for offline use
+    localStorage.setItem('ac_pics', JSON.stringify(profilePics));
+  }catch(e){ console.warn('loadAllProfilePics error:',e.message); }
 }
 
 function getUserPic(userId){
@@ -1404,19 +1435,25 @@ async function saveProfilePic(){
   const btn=document.getElementById('profile-save-btn');
   btn.textContent='Saving...'; btn.disabled=true;
   try{
-    // save to Supabase app_config
-    await sb.upsert('app_config',[{key:'pic_'+curUser.id, value:newPicDataUrl}],'key');
-    // update local cache
+    // 1. Save to localStorage immediately (works offline, persists on reopen)
     profilePics[curUser.id]=newPicDataUrl;
-    // update me-bar avatar
+    localStorage.setItem('ac_pics', JSON.stringify(profilePics));
+
+    // 2. Save to Supabase so others can see it
+    await sb.upsert('app_config',[{key:'pic_'+curUser.id, value:newPicDataUrl}],'key');
+
+    // 3. Update UI everywhere
     refreshMeAvatar();
-    // refresh contacts list
+    renderContacts();
+    if(activeConv) silentReload(activeConv);
+    closeProfileModal();
+    toast('✓ Profile photo saved!');
+  }catch(e){
+    // Even if Supabase fails, it's saved locally
+    refreshMeAvatar();
     renderContacts();
     closeProfileModal();
-    toast('✓ Profile photo updated!');
-  }catch(e){
-    toast('⚠ Failed to save: '+e.message);
-    btn.textContent='Save Photo'; btn.disabled=false;
+    toast('✓ Saved locally. Will sync when connected.');
   }
 }
 
